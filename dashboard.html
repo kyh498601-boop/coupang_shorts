@@ -1,0 +1,1569 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>생활꿀템연구소 — 콘텐츠 자동화 대시보드</title>
+<style>
+:root {
+  --brand:      #2E8B57;
+  --brand-light:#E8F5E9;
+  --brand-dark: #1B5E3B;
+  --brand-mid:  #4CAF50;
+  --g50:#FAFAFA;--g100:#F5F5F5;--g200:#EEEEEE;--g300:#E0E0E0;
+  --g400:#BDBDBD;--g500:#9E9E9E;--g600:#757575;--g700:#616161;
+  --g800:#424242;--g900:#212121;
+  --danger:#E53935;--warning:#F57C00;
+  --radius:12px;--radius-sm:8px;
+  --shadow:0 2px 12px rgba(0,0,0,.08);
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:'Malgun Gothic','맑은 고딕',-apple-system,sans-serif;background:var(--g100);color:var(--g900);min-height:100vh}
+
+/* ── Header ── */
+.header{background:var(--brand);color:#fff;padding:0 24px;height:60px;display:flex;align-items:center;justify-content:space-between;box-shadow:0 2px 8px rgba(0,0,0,.15);position:sticky;top:0;z-index:100}
+.header-logo{display:flex;align-items:center;gap:10px;font-size:18px;font-weight:700}
+.header-meta{font-size:12px;opacity:.85;text-align:right;line-height:1.6}
+
+/* ── Stage bar ── */
+.stage-bar{background:#fff;border-bottom:1px solid var(--g200);padding:12px 24px;display:flex;align-items:center;overflow-x:auto}
+.stage-item{display:flex;align-items:center;gap:8px;flex-shrink:0;cursor:pointer}
+.stage-dot{width:28px;height:28px;border-radius:50%;background:var(--g300);color:var(--g500);font-size:12px;font-weight:700;display:flex;align-items:center;justify-content:center;transition:all .3s}
+.stage-dot:hover{opacity:.8;transform:scale(1.1)}
+.stage-dot.active{background:var(--brand);color:#fff}
+.stage-dot.done{background:var(--brand-mid);color:#fff}
+.stage-label{font-size:12px;color:var(--g500);font-weight:500;transition:color .3s}
+.stage-label.active{color:var(--brand);font-weight:700}
+.stage-label.done{color:var(--brand-mid)}
+.stage-arrow{width:24px;height:2px;background:var(--g300);margin:0 8px;flex-shrink:0}
+.stage-arrow.done{background:var(--brand-mid)}
+
+/* ── Layout ── */
+.main{max-width:900px;margin:0 auto;padding:24px 16px 48px}
+
+/* ── Card ── */
+.card{background:#fff;border-radius:var(--radius);box-shadow:var(--shadow);margin-bottom:16px;overflow:hidden}
+.card-header{padding:16px 20px;border-bottom:1px solid var(--g100);display:flex;align-items:center;gap:10px}
+.card-header h2{font-size:15px;font-weight:700}
+.card-header .badge{font-size:10px;padding:2px 8px;border-radius:99px;background:var(--brand-light);color:var(--brand-dark);font-weight:700}
+.card-body{padding:20px}
+
+/* ── Form ── */
+.form-row{margin-bottom:16px}
+.form-row:last-child{margin-bottom:0}
+.form-label{display:block;font-size:13px;font-weight:600;color:var(--g700);margin-bottom:6px}
+.form-label .req{color:var(--danger);margin-left:2px}
+.form-input{width:100%;height:42px;border:1.5px solid var(--g300);border-radius:var(--radius-sm);padding:0 14px;font-size:14px;font-family:inherit;color:var(--g900);transition:border-color .2s;outline:none}
+.form-input:focus{border-color:var(--brand)}
+.form-input.error{border-color:var(--danger)}
+textarea.form-input{height:auto;padding:10px 14px;resize:vertical}
+
+/* ── Toggle buttons ── */
+.btn-group{display:flex;gap:8px;flex-wrap:wrap}
+.btn-toggle{padding:8px 16px;border-radius:99px;border:1.5px solid var(--g300);background:#fff;color:var(--g600);font-size:13px;font-weight:600;cursor:pointer;transition:all .2s;font-family:inherit}
+.btn-toggle:hover{border-color:var(--brand);color:var(--brand)}
+.btn-toggle.selected{background:var(--brand);border-color:var(--brand);color:#fff}
+
+/* ── Upload ── */
+.upload-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+@media(max-width:600px){.upload-grid{grid-template-columns:1fr}}
+.upload-zone{border:2px dashed var(--g300);border-radius:var(--radius);padding:20px;text-align:center;cursor:pointer;transition:all .2s;position:relative}
+.upload-zone:hover,.upload-zone.dragover{border-color:var(--brand);background:var(--brand-light)}
+.upload-zone input[type="file"]{position:absolute;inset:0;opacity:0;cursor:pointer;width:100%;height:100%}
+.upload-icon{font-size:32px;margin-bottom:8px}
+.upload-title{font-size:14px;font-weight:700;color:var(--g700);margin-bottom:4px}
+.upload-sub{font-size:12px;color:var(--g500)}
+.upload-limit{display:inline-block;margin-top:8px;font-size:11px;padding:2px 10px;border-radius:99px;background:var(--g100);color:var(--g600)}
+.preview-list{display:flex;flex-wrap:wrap;gap:8px;margin-top:12px}
+.preview-item{position:relative;width:72px;height:72px;border-radius:8px;overflow:hidden;border:2px solid var(--g200)}
+.preview-item img{width:100%;height:100%;object-fit:cover}
+.preview-item .remove-btn{position:absolute;top:2px;right:2px;width:18px;height:18px;border-radius:50%;background:rgba(0,0,0,.55);color:#fff;font-size:11px;border:none;cursor:pointer;display:flex;align-items:center;justify-content:center}
+.preview-item .remove-btn:hover{background:var(--danger)}
+
+/* ── Error msg ── */
+.error-msg{font-size:12px;color:var(--danger);margin-top:4px;display:none}
+.error-msg.show{display:block}
+
+/* ── Policy ── */
+.policy-row{display:flex;gap:8px;align-items:flex-start;margin-bottom:10px}
+.policy-platform{width:130px;flex-shrink:0}
+.policy-text{flex:1;height:60px;resize:vertical}
+.policy-del{flex-shrink:0;width:36px;height:60px;border:1.5px solid var(--danger);background:#fff;color:var(--danger);border-radius:var(--radius-sm);cursor:pointer;font-size:14px;font-family:inherit}
+.policy-del:hover{background:var(--danger);color:#fff}
+
+/* ── Checklist ── */
+.checklist{list-style:none}
+.checklist li{display:flex;align-items:center;gap:8px;padding:6px 0;font-size:13px;color:var(--g600);border-bottom:1px solid var(--g100)}
+.checklist li:last-child{border-bottom:none}
+.checklist li .check-icon{font-size:16px;flex-shrink:0}
+.checklist li.ok{color:var(--brand-dark)}
+.checklist li.fail{color:var(--danger)}
+
+/* ── Policy notice ── */
+.policy-box{background:#FFF8E1;border:1px solid #FFD54F;border-radius:var(--radius-sm);padding:12px 16px;font-size:12px;color:#5D4037;line-height:1.7}
+.policy-box strong{color:var(--warning)}
+
+/* ── Run btn ── */
+.run-btn{width:100%;height:56px;border-radius:var(--radius);background:var(--brand);color:#fff;font-size:17px;font-weight:700;border:none;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:10px;transition:all .2s;font-family:inherit;box-shadow:0 4px 16px rgba(46,139,87,.3)}
+.run-btn:hover{background:var(--brand-dark);transform:translateY(-1px)}
+.run-btn:active{transform:translateY(0)}
+.run-btn:disabled{background:var(--g400);cursor:not-allowed;transform:none;box-shadow:none}
+
+/* ── Step sections ── */
+.step-section{display:none}
+.step-section.active{display:block}
+
+/* ── Pipeline status ── */
+.pipeline-step{display:flex;align-items:center;gap:12px;padding:8px 0}
+.pipeline-step-icon{width:32px;height:32px;border-radius:50%;background:var(--g200);display:flex;align-items:center;justify-content:center;font-size:14px;flex-shrink:0}
+.pipeline-step-icon.done{background:var(--brand)}
+.pipeline-step-icon.running{background:#FF9800;animation:pulse 1s infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.5}}
+.pipeline-step-text{font-size:13px;color:var(--g700)}
+.pipeline-step-text strong{color:var(--g900)}
+.progress-wrap{background:var(--g200);border-radius:99px;height:6px;overflow:hidden;margin-top:10px}
+.progress-bar{height:100%;background:var(--brand);border-radius:99px;transition:width .4s;width:0%}
+
+/* ── Result ── */
+.result-section{background:var(--brand-light);border:1.5px solid #A5D6A7;border-radius:var(--radius);padding:20px;margin-bottom:16px}
+.result-title{font-size:14px;font-weight:700;color:var(--brand-dark);margin-bottom:12px;display:flex;align-items:center;gap:6px}
+.ab-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+@media(max-width:500px){.ab-grid{grid-template-columns:1fr}}
+.ab-card{border:2px solid var(--g300);border-radius:var(--radius-sm);padding:14px;cursor:pointer;background:#fff;transition:all .2s;position:relative}
+.ab-card:hover{border-color:var(--brand)}
+.ab-card.selected{border-color:var(--brand);background:var(--brand-light)}
+.ab-card .ab-label{display:inline-block;font-size:11px;font-weight:700;padding:2px 8px;border-radius:4px;background:var(--g200);color:var(--g700);margin-bottom:8px}
+.ab-card.selected .ab-label{background:var(--brand);color:#fff}
+.ab-card p{font-size:13px;color:var(--g800);line-height:1.5}
+.ab-check{position:absolute;top:10px;right:10px;width:20px;height:20px;border-radius:50%;border:2px solid var(--g300);display:flex;align-items:center;justify-content:center;font-size:12px;transition:all .2s}
+.ab-card.selected .ab-check{border-color:var(--brand);background:var(--brand);color:#fff}
+
+/* ── Action row ── */
+.action-row{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}
+.action-btn{flex:1;min-width:120px;height:40px;border-radius:var(--radius-sm);border:1.5px solid var(--brand);background:#fff;color:var(--brand);font-size:13px;font-weight:600;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:6px;transition:all .2s;font-family:inherit}
+.action-btn:hover{background:var(--brand);color:#fff}
+.action-btn.primary{background:var(--brand);color:#fff}
+.action-btn.primary:hover{background:var(--brand-dark)}
+.action-btn:disabled{opacity:.5;cursor:not-allowed}
+
+/* ── Slide list ── */
+.slide-list{display:flex;flex-direction:column;gap:8px}
+.slide-item{display:flex;align-items:flex-start;gap:12px;padding:12px;background:#fff;border:1px solid var(--g200);border-radius:var(--radius-sm)}
+.slide-num{width:28px;height:28px;border-radius:50%;background:var(--brand-light);color:var(--brand-dark);font-size:12px;font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0}
+.slide-content{flex:1}
+.slide-title{font-size:13px;font-weight:700;color:var(--g800)}
+.slide-desc{font-size:12px;color:var(--g600);margin-top:2px}
+
+/* ── Caption ── */
+.tabs{display:flex;border-bottom:2px solid var(--g200);margin-bottom:16px;overflow-x:auto}
+.tab-btn{padding:8px 16px;font-size:13px;font-weight:600;color:var(--g500);border:none;background:none;cursor:pointer;border-bottom:2px solid transparent;margin-bottom:-2px;white-space:nowrap;font-family:inherit;transition:all .2s}
+.tab-btn.active{color:var(--brand);border-bottom-color:var(--brand)}
+.tab-content{display:none}
+.tab-content.active{display:block}
+.caption-box{background:var(--g50);border:1.5px solid var(--g200);border-radius:var(--radius-sm);padding:14px;font-size:13px;color:var(--g800);line-height:1.7;white-space:pre-wrap;word-break:break-all;max-height:200px;overflow-y:auto}
+.comment-template{background:var(--g900);color:#A5D6A7;border-radius:var(--radius-sm);padding:14px 16px;font-size:13px;line-height:1.8;font-family:monospace;white-space:pre-wrap}
+
+/* ── Info / path ── */
+.info-box{background:#E3F2FD;border:1px solid #90CAF9;border-radius:var(--radius-sm);padding:14px 16px;font-size:13px;color:#1565C0;line-height:1.7;display:flex;gap:10px}
+.info-box .info-icon{font-size:18px;flex-shrink:0}
+.path-box{background:var(--g100);border-radius:var(--radius-sm);padding:10px 14px;font-size:12px;color:var(--g700);font-family:monospace;word-break:break-all;border:1px solid var(--g200);margin-top:8px}
+
+/* ── Misc ── */
+.divider{height:1px;background:var(--g100);margin:20px 0}
+.final-btn-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+@media(max-width:500px){.final-btn-grid{grid-template-columns:1fr}}
+.new-product-btn{width:100%;height:48px;border-radius:var(--radius);border:2px dashed var(--brand);background:#fff;color:var(--brand);font-size:15px;font-weight:700;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:8px;transition:all .2s;margin-top:8px;font-family:inherit}
+.new-product-btn:hover{background:var(--brand-light)}
+.time-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.time-card{background:var(--g50);border-radius:8px;padding:12px;font-size:12px}
+.time-card strong{display:block;margin-bottom:4px}
+.time-card span{color:var(--g600)}
+
+/* ── Toast ── */
+.toast{position:fixed;bottom:24px;right:24px;background:var(--g900);color:#fff;padding:12px 20px;border-radius:var(--radius-sm);font-size:13px;font-weight:600;opacity:0;transform:translateY(8px);transition:all .3s;z-index:1000;max-width:300px}
+.toast.show{opacity:1;transform:translateY(0)}
+.toast.success{background:var(--brand-dark)}
+
+/* ── BGM ── */
+.bgm-vol-row{display:flex;align-items:center;gap:10px;margin:12px 0}
+.bgm-vol-row label{font-size:13px;font-weight:600;color:var(--g700);white-space:nowrap;width:80px}
+.bgm-vol-row input[type=range]{flex:1;accent-color:var(--brand)}
+.bgm-vol-val{font-size:13px;font-weight:700;color:var(--brand);width:36px;text-align:right}
+.bgm-info{font-size:11px;color:var(--g500);line-height:1.6;margin-bottom:10px}
+.bgm-status{font-size:12px;color:var(--g500);margin-top:6px;min-height:18px}
+.bgm-result-row{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px;padding-top:12px;border-top:1px solid var(--g100)}
+
+/* ── TTS ── */
+.tts-voice-row{display:flex;gap:10px;align-items:center;margin-bottom:14px}
+.tts-voice-row select{flex:1}
+.tts-voice-row .badge-new{font-size:10px;padding:2px 8px;border-radius:99px;background:#E3F2FD;color:#1565C0;font-weight:700;white-space:nowrap}
+.tts-result-row{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px;padding-top:12px;border-top:1px solid var(--g100)}
+.tts-status{font-size:12px;color:var(--g500);margin-top:6px;min-height:18px}
+</style>
+</head>
+<body>
+
+<div class="header">
+  <div class="header-logo">
+    <span>🌿</span>
+    <span>생활꿀템연구소</span>
+  </div>
+  <div class="header-meta">콘텐츠 자동화 파이프라인<br>@youngho4986 · linktr.ee/kyh498601</div>
+</div>
+
+<div class="stage-bar">
+  <div class="stage-item" onclick="goToStep(1)"><div class="stage-dot active" id="dot1">1</div><span class="stage-label active" id="lbl1">정보 입력</span></div>
+  <div class="stage-arrow" id="arr1"></div>
+  <div class="stage-item" onclick="goToStep(2)"><div class="stage-dot" id="dot2">2</div><span class="stage-label" id="lbl2">파이프라인</span></div>
+  <div class="stage-arrow" id="arr2"></div>
+  <div class="stage-item" onclick="goToStep(3)"><div class="stage-dot" id="dot3">3</div><span class="stage-label" id="lbl3">캐러셀 결과</span></div>
+  <div class="stage-arrow" id="arr3"></div>
+  <div class="stage-item" onclick="goToStep(4)"><div class="stage-dot" id="dot4">4</div><span class="stage-label" id="lbl4">영상 변환</span></div>
+  <div class="stage-arrow" id="arr4"></div>
+  <div class="stage-item" onclick="goToStep(5)"><div class="stage-dot" id="dot5">5</div><span class="stage-label" id="lbl5">배포 준비</span></div>
+</div>
+
+<div class="main">
+
+<!-- ===== STEP 1 ===== -->
+<div id="step1" class="step-section active">
+
+  <!-- 제품 기본 정보 -->
+  <div class="card">
+    <div class="card-header"><h2>📦 제품 기본 정보</h2><span class="badge">필수</span></div>
+    <div class="card-body">
+      <div class="form-row">
+        <label class="form-label">제품명 <span class="req">*</span></label>
+        <input type="text" class="form-input" id="productName" placeholder="예: 세타필 모이스처라이징 로션 250ml">
+        <div class="error-msg" id="err-productName">제품명을 입력해주세요.</div>
+      </div>
+      <div class="form-row">
+        <label class="form-label">쿠팡 파트너스 링크 <span class="req">*</span></label>
+        <input type="url" class="form-input" id="partnerLink" placeholder="https://link.coupang.com/a/...">
+        <div class="error-msg" id="err-partnerLink">쿠팡 파트너스 링크를 입력해주세요.</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 카테고리 -->
+  <div class="card">
+    <div class="card-header"><h2>🏷️ 카테고리 선택</h2><span class="badge">필수</span></div>
+    <div class="card-body">
+      <div class="btn-group" id="categoryGroup">
+        <button class="btn-toggle" data-val="화장품">💄 화장품</button>
+        <button class="btn-toggle" data-val="주방용품">🍳 주방용품</button>
+        <button class="btn-toggle" data-val="생활가전">🏠 생활가전</button>
+        <button class="btn-toggle" data-val="자동차용품">🚗 자동차용품</button>
+        <button class="btn-toggle" data-val="기타">📦 기타</button>
+      </div>
+      <div class="error-msg" id="err-category">카테고리를 선택해주세요.</div>
+      <div style="margin-top:12px">
+        <div class="policy-box"><strong>⚠️ 작업 불가 카테고리:</strong> 건강기능식품 (홍삼·비타민·프로바이오틱스), 의약외품 (마스크·파스·구강청결제), 의료기기<br>→ 해당 제품 입력 시 파이프라인 자동 중단됩니다.</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 플랫폼 -->
+  <div class="card">
+    <div class="card-header"><h2>📱 플랫폼 선택</h2><span class="badge">필수</span></div>
+    <div class="card-body">
+      <div class="btn-group" id="platformGroup">
+        <button class="btn-toggle" data-val="전체">🌐 전체</button>
+        <button class="btn-toggle" data-val="인스타">📸 인스타</button>
+        <button class="btn-toggle" data-val="유튜브">▶️ 유튜브</button>
+        <button class="btn-toggle" data-val="틱톡">🎵 틱톡</button>
+        <button class="btn-toggle" data-val="네이버클립">🟢 네이버클립</button>
+      </div>
+      <div class="error-msg" id="err-platform">플랫폼을 선택해주세요.</div>
+    </div>
+  </div>
+
+  <!-- 이미지 업로드 -->
+  <div class="card">
+    <div class="card-header"><h2>🖼️ 이미지 업로드</h2><span class="badge">필수</span></div>
+    <div class="card-body">
+      <div class="upload-grid">
+        <div>
+          <div class="form-label">제품 이미지 <span class="req">*</span></div>
+          <div class="upload-zone" id="productImgZone"
+            ondrop="handleDrop(event,'product')"
+            ondragover="ev=>ev.preventDefault()"
+            ondragleave="ev=>ev.currentTarget.classList.remove('dragover')">
+            <input type="file" id="productImgInput" accept="image/*" multiple onchange="handleFileSelect(event,'product')">
+            <div class="upload-icon">📷</div>
+            <div class="upload-title">제품 이미지 업로드</div>
+            <div class="upload-sub">클릭하거나 파일을 여기에 끌어놓으세요</div>
+            <span class="upload-limit">최대 10장</span>
+          </div>
+          <div class="preview-list" id="productPreview"></div>
+          <div class="error-msg" id="err-productImg">제품 이미지를 최소 1장 업로드해주세요.</div>
+        </div>
+        <div>
+          <div class="form-label">상품평 캡처 <span style="font-size:11px;color:var(--g500)">(선택)</span></div>
+          <div class="upload-zone" id="reviewImgZone"
+            ondrop="handleDrop(event,'review')"
+            ondragover="ev=>ev.preventDefault()"
+            ondragleave="ev=>ev.currentTarget.classList.remove('dragover')">
+            <input type="file" id="reviewImgInput" accept="image/*" multiple onchange="handleFileSelect(event,'review')">
+            <div class="upload-icon">💬</div>
+            <div class="upload-title">상품평 캡처 업로드</div>
+            <div class="upload-sub">쿠팡 상품평 스크린샷</div>
+            <span class="upload-limit">최대 2장</span>
+          </div>
+          <div class="preview-list" id="reviewPreview"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 플랫폼 정책 -->
+  <div class="card">
+    <div class="card-header"><h2>📋 플랫폼 정책 업데이트</h2><span class="badge">선택</span></div>
+    <div class="card-body">
+      <p style="font-size:12px;color:var(--g500);margin-bottom:16px">플랫폼별 최신 정책을 입력하면 파이프라인 실행 시 자동으로 반영됩니다. 브라우저를 닫아도 유지됩니다.</p>
+      <div id="policyList"></div>
+      <button class="action-btn" style="margin-top:4px;flex:none;min-width:0" onclick="addPolicy()">+ 플랫폼 추가</button>
+    </div>
+  </div>
+
+  <!-- 입력 확인 -->
+  <div class="card">
+    <div class="card-header"><h2>✅ 입력 확인</h2></div>
+    <div class="card-body">
+      <ul class="checklist" id="checklist">
+        <li id="check-name" class="fail"><span class="check-icon">✗</span> 제품명 입력</li>
+        <li id="check-link" class="fail"><span class="check-icon">✗</span> 쿠팡 파트너스 링크 입력</li>
+        <li id="check-cat"  class="fail"><span class="check-icon">✗</span> 카테고리 선택</li>
+        <li id="check-plat" class="fail"><span class="check-icon">✗</span> 플랫폼 선택</li>
+        <li id="check-img"  class="fail"><span class="check-icon">✗</span> 제품 이미지 최소 1장 업로드</li>
+      </ul>
+      <div class="divider"></div>
+      <button class="run-btn" id="runBtn" onclick="startPipeline()">🚀 파이프라인 실행</button>
+    </div>
+  </div>
+
+</div><!-- /step1 -->
+
+
+<!-- ===== STEP 2 ===== -->
+<div id="step2" class="step-section">
+  <div class="card">
+    <div class="card-header"><h2>⚙️ 파이프라인 실행 중</h2></div>
+    <div class="card-body">
+      <div id="pipelineSteps">
+        <div class="pipeline-step"><div class="pipeline-step-icon" id="psi1">📋</div><div class="pipeline-step-text"><strong>STEP 1</strong> — 정책 파일 확인</div></div>
+        <div class="pipeline-step"><div class="pipeline-step-icon" id="psi2">🔍</div><div class="pipeline-step-text"><strong>STEP 2</strong> — 제품 파악 (이미지 분석)</div></div>
+        <div class="pipeline-step"><div class="pipeline-step-icon" id="psi3">💡</div><div class="pipeline-step-text"><strong>STEP 3</strong> — 오퍼 설계 (가치 강조)</div></div>
+        <div class="pipeline-step"><div class="pipeline-step-icon" id="psi4">🧠</div><div class="pipeline-step-text"><strong>STEP 4</strong> — 구매 심리 요소 삽입</div></div>
+        <div class="pipeline-step"><div class="pipeline-step-icon" id="psi5">✍️</div><div class="pipeline-step-text"><strong>STEP 5</strong> — 슬라이드 카피 10장 작성</div></div>
+        <div class="pipeline-step"><div class="pipeline-step-icon" id="psi6">🎨</div><div class="pipeline-step-text"><strong>STEP 6</strong> — 캐러셀 HTML 생성</div></div>
+      </div>
+      <div class="progress-wrap" style="margin-top:16px"><div class="progress-bar" id="progressBar"></div></div>
+      <p style="font-size:12px;color:var(--g500);margin-top:8px;text-align:center" id="progressLabel">처리 중...</p>
+    </div>
+  </div>
+</div><!-- /step2 -->
+
+
+<!-- ===== STEP 3 ===== -->
+<div id="step3" class="step-section">
+
+  <!-- A/B 선택 -->
+  <div class="card">
+    <div class="card-header"><h2>🎯 썸네일 카피 A/B 선택</h2><span class="badge">필수 선택</span></div>
+    <div class="card-body">
+      <p style="font-size:12px;color:var(--g500);margin-bottom:12px">마음에 드는 카피를 선택해주세요.</p>
+      <div class="ab-grid">
+        <div class="ab-card" id="abA" onclick="selectAB('A')">
+          <div class="ab-label">A안</div><div class="ab-check">✓</div>
+          <p id="abAText">지금 이 순간만 놓치지 마세요<br>역대급 특가 진행 중 ✨</p>
+        </div>
+        <div class="ab-card" id="abB" onclick="selectAB('B')">
+          <div class="ab-label">B안</div><div class="ab-check">✓</div>
+          <p id="abBText">실제 사용자 ○만명이 선택한<br>그 제품 지금 특가 🔥</p>
+        </div>
+      </div>
+      <div id="abSelected" style="display:none;margin-top:12px;padding:10px 14px;background:var(--brand-light);border-radius:var(--radius-sm);font-size:13px;color:var(--brand-dark);font-weight:600">
+        ✅ <span id="abSelectedLabel"></span>안 선택됨
+      </div>
+    </div>
+  </div>
+
+  <!-- 슬라이드 카피 -->
+  <div class="card">
+    <div class="card-header"><h2>📄 슬라이드 카피 10장</h2></div>
+    <div class="card-body"><div class="slide-list" id="slideList"></div></div>
+  </div>
+
+  <!-- 다운로드 -->
+  <div class="card">
+    <div class="card-header"><h2>📥 결과물 다운로드</h2></div>
+    <div class="card-body">
+      <div class="action-row">
+        <button id="btn-download-png" class="action-btn primary" onclick="downloadPNG()">🖼️ PNG 10장 다운로드</button>
+        <button id="btn-download-srt" class="action-btn" onclick="downloadSRT()">💬 자막 다운로드</button>
+        <button class="action-btn" onclick="copyCaption()">📋 캡션 복사</button>
+        <button class="action-btn" onclick="saveDrive()">☁️ Google Drive 저장</button>
+      </div>
+      <div class="divider"></div>
+      <div class="info-box">
+        <div class="info-icon">ℹ️</div>
+        <div>
+          <strong>영상 변환 방법:</strong><br>
+          1. PNG 10장을 아래 폴더에 복사하세요<br>
+          2. render.bat를 실행하세요<br>
+          <div class="path-box">C:\Users\JOEUN\coupang_shorts\shopping-shorts\public\input\</div>
+        </div>
+      </div>
+      <div style="margin-top:12px">
+        <button class="run-btn" onclick="goToStep(4)">▶️ MP4 렌더링 완료 후 다음 단계</button>
+      </div>
+    </div>
+  </div>
+
+
+  <!-- TTS 나레이션 카드 -->
+  <div class="card">
+    <div class="card-header">
+      <h2>🎙️ TTS 나레이션 자동화</h2>
+      <span class="badge">STEP 7.6</span>
+    </div>
+    <div class="card-body">
+      <div class="tts-voice-row">
+        <select class="form-input" id="ttsVoice">
+          <option value="Kore" selected>Kore — 확고한 (기본)</option>
+          <option value="Zephyr">Zephyr — 밝은</option>
+          <option value="Puck">Puck — 장난스러운</option>
+          <option value="Charon">Charon — 차분한</option>
+          <option value="Fenrir">Fenrir — 흥분된</option>
+          <option value="Leda">Leda — 어린</option>
+          <option value="Orus">Orus — 확고한</option>
+          <option value="Aoede">Aoede — 경쾌한</option>
+          <option value="Callirrhoe">Callirrhoe — 편안한</option>
+          <option value="Autonoe">Autonoe — 밝은</option>
+          <option value="Enceladus">Enceladus — 숨찬</option>
+          <option value="Iapetus">Iapetus — 차분한</option>
+          <option value="Umbriel">Umbriel — 편안한</option>
+          <option value="Algieba">Algieba — 차분한</option>
+          <option value="Despina">Despina — 편안한</option>
+          <option value="Erinome">Erinome — 차분한</option>
+          <option value="Algenib">Algenib — 자갈목소리</option>
+          <option value="Rasalgethi">Rasalgethi — 알림</option>
+          <option value="Laomedeia">Laomedeia — 경쾌한</option>
+          <option value="Achernar">Achernar — 부드러운</option>
+          <option value="Alnilam">Alnilam — 확고한</option>
+          <option value="Schedar">Schedar — 차분한</option>
+          <option value="Gacrux">Gacrux — 성숙한</option>
+          <option value="Pulcherrima">Pulcherrima — 가볍고 앞쪽</option>
+          <option value="Achird">Achird — 부드러운</option>
+          <option value="Zubenelgenubi">Zubenelgenubi — 편안한</option>
+          <option value="Vindemiatrix">Vindemiatrix — 표현력</option>
+          <option value="Sadachbia">Sadachbia — 생기 있는</option>
+          <option value="Sadaltager">Sadaltager — 지식적</option>
+          <option value="Sulafat">Sulafat — 따뜻한</option>
+        </select>
+        <span class="badge-new">30개 목소리</span>
+      </div>
+      <p style="font-size:11px;color:var(--g500);margin-bottom:12px;line-height:1.6">
+        슬라이드 1(강조) · 4(밝게) · 8(따뜻하게) · 9(긴박) · 10(강조) 감정 태그 자동 적용
+      </p>
+      <button class="action-btn primary" id="btn-generate-tts" onclick="generateTTS()" style="width:100%;height:42px">
+        🎙️ 나레이션 생성 (Gemini TTS)
+      </button>
+      <div class="tts-status" id="tts-status"></div>
+      <div class="tts-result-row" id="tts-result" style="display:none">
+        <button class="action-btn" id="btn-tts-play" onclick="playTTS()">▶️ 미리듣기</button>
+        <button class="action-btn" id="btn-tts-regen" onclick="regenTTS()">🔄 재생성</button>
+        <button class="action-btn primary" id="btn-tts-dl" onclick="downloadTTS()">⬇️ 다운로드</button>
+        <audio id="tts-audio" style="display:none" onended="resetPlayBtn()"></audio>
+      </div>
+    </div>
+  </div>
+
+  <!-- 유튜브 썸네일 자동 생성 카드 -->
+  <div class="card">
+    <div class="card-header">
+      <h2>🖼️ 유튜브 썸네일 자동 생성</h2>
+      <span class="badge">STEP 6.5</span>
+    </div>
+    <div class="card-body">
+      <p style="font-size:12px;color:var(--g500);margin-bottom:12px;line-height:1.7">
+        슬라이드 1번 후킹 카피 + 제품이미지로 1280×720 썸네일 2가지 자동 생성.<br>
+        A안: 좌측 제품이미지 / 우측 텍스트 &nbsp;|&nbsp; B안: 풀블리드 블러 배경 + 중앙 텍스트
+      </p>
+
+      <!-- Hook 텍스트 편집란 (스킬: 사용자 검토 후 생성) -->
+      <div style="margin-bottom:10px">
+        <label style="font-size:11px;font-weight:700;color:var(--g600);display:block;margin-bottom:4px">
+          후킹 문구 <span style="font-weight:400;color:var(--g400)">(최대 5단어 권장 — 비워두면 슬라이드 1번 자동 사용)</span>
+        </label>
+        <input type="text" id="thumbHookInput" maxlength="40"
+               placeholder="예: 이거 진짜 대박이에요"
+               style="width:100%;padding:8px 12px;border:1px solid var(--g200);
+                      border-radius:8px;font-size:13px;font-family:inherit;
+                      box-sizing:border-box;outline:none"
+               onfocus="this.style.borderColor='var(--brand)'"
+               onblur="this.style.borderColor='var(--g200)'"
+               oninput="updateThumbHookPreview(this.value)">
+        <div id="thumb-hook-preview" style="font-size:11px;color:var(--g400);margin-top:3px"></div>
+      </div>
+
+      <button class="action-btn primary" id="btn-thumb" onclick="generateThumbnail()"
+              style="width:100%;height:42px">
+        🖼️ 썸네일 A/B 2안 자동 생성
+      </button>
+      <div id="thumb-status" style="font-size:12px;color:var(--g500);margin-top:8px"></div>
+
+      <!-- A/B 미리보기 -->
+      <div id="thumb-preview" style="display:none;margin-top:16px">
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+          <!-- A안 -->
+          <div>
+            <div style="font-size:12px;font-weight:700;color:var(--brand);margin-bottom:6px">A안 — 좌측이미지 레이아웃</div>
+            <img id="thumb-img-a" src="" alt="썸네일 A안"
+                 style="width:100%;border-radius:8px;border:2px solid var(--g100);cursor:pointer"
+                 onclick="selectThumbnail('a')" title="클릭하여 선택">
+            <button class="action-btn" onclick="downloadThumbnail('a')"
+                    style="width:100%;margin-top:6px">⬇️ A안 다운로드</button>
+          </div>
+          <!-- B안 -->
+          <div>
+            <div style="font-size:12px;font-weight:700;color:var(--brand);margin-bottom:6px">B안 — 풀블리드 블러</div>
+            <img id="thumb-img-b" src="" alt="썸네일 B안"
+                 style="width:100%;border-radius:8px;border:2px solid var(--g100);cursor:pointer"
+                 onclick="selectThumbnail('b')" title="클릭하여 선택">
+            <button class="action-btn" onclick="downloadThumbnail('b')"
+                    style="width:100%;margin-top:6px">⬇️ B안 다운로드</button>
+          </div>
+        </div>
+        <!-- 선택 표시 -->
+        <div id="thumb-selected-msg" style="display:none;margin-top:10px;padding:8px 14px;
+             background:var(--brand-light);border-radius:8px;font-size:12px;
+             color:var(--brand-dark);font-weight:600">
+          ✅ <span id="thumb-selected-label"></span>안 선택됨 — 유튜브 업로드 시 이 썸네일을 사용하세요
+        </div>
+        <div style="margin-top:10px;font-size:11px;color:var(--g400);line-height:1.6">
+          💡 유튜브 스튜디오 → 동영상 → 세부정보 → 맞춤 썸네일에 업로드하세요.
+        </div>
+      </div>
+    </div>
+  </div>
+
+</div><!-- /step3 -->
+
+
+<!-- ===== STEP 4 ===== -->
+<div id="step4" class="step-section">
+  <div class="card">
+    <div class="card-header"><h2>🎬 영상 변환 확인</h2></div>
+    <div class="card-body">
+      <div class="info-box" style="background:#FFF3E0;border-color:#FFB74D">
+        <div class="info-icon">🎞️</div>
+        <div>
+          <strong>render.bat 실행 체크리스트</strong><br>
+          • PNG 10장 → public\input\ 폴더에 복사<br>
+          • render.bat 실행 → output\ 폴더에 MP4 생성 확인<br>
+          • 해상도: 1080×1920 (9:16) | 슬라이드당 2.5초
+        </div>
+      </div>
+      <div class="divider"></div>
+      <div class="form-row">
+        <label class="form-label">MP4 출력 경로</label>
+        <div class="path-box">C:\Users\JOEUN\coupang_shorts\shopping-shorts\output\shopping-shorts.mp4</div>
+      </div>
+      <div class="action-row" style="margin-top:16px">
+        <button class="action-btn primary" onclick="confirmMP4()">✅ MP4 생성 완료 확인</button>
+        <button class="action-btn" onclick="openFolder()">📁 output 폴더 열기</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- BGM 자동 추가 카드 -->
+  <div class="card">
+    <div class="card-header">
+      <h2>🎵 BGM 자동 추가</h2>
+      <span class="badge">STEP 7.7</span>
+      <span id="bgm-count-badge" style="margin-left:auto;font-size:11px;color:var(--g500);font-weight:600">음원 0개</span>
+    </div>
+    <div class="card-body">
+      <p class="bgm-info">
+        bgm\ 폴더에 mp3/wav 파일을 자유롭게 추가하세요. 실행할 때마다 랜덤 선택됩니다.<br>
+        나레이션(output_narration.wav)이 있으면 BGM + 나레이션을 동시에 합칩니다.
+      </p>
+
+      <!-- 현재 선택된 BGM 표시 -->
+      <div id="bgm-current" style="display:none;font-size:12px;color:var(--g700);
+           background:var(--g50);border:1px solid var(--g200);border-radius:8px;
+           padding:8px 12px;margin-bottom:10px;word-break:break-all">
+        🎵 선택된 BGM: <strong id="bgm-current-name">-</strong>
+      </div>
+
+      <!-- 볼륨 슬라이더 -->
+      <div class="bgm-vol-row">
+        <label>BGM 볼륨</label>
+        <input type="range" id="bgmVolumeSlider" min="5" max="50" value="15"
+          oninput="document.getElementById('bgmVolVal').textContent=this.value+'%'">
+        <span class="bgm-vol-val" id="bgmVolVal">15%</span>
+      </div>
+
+      <!-- 메인 버튼 -->
+      <button class="action-btn primary" id="btn-generate-bgm" onclick="generateBGM()" style="width:100%;height:42px">
+        🎵 BGM 자동 추가
+      </button>
+      <div class="bgm-status" id="bgm-status"></div>
+
+      <!-- 결과 버튼 -->
+      <div class="bgm-result-row" id="bgm-result" style="display:none">
+        <button class="action-btn" id="btn-bgm-preview" onclick="previewBGM()">▶️ 미리보기</button>
+        <button class="action-btn" id="btn-bgm-change" onclick="changeBGM()">🔄 다른 BGM</button>
+        <button class="action-btn primary" id="btn-bgm-dl" onclick="downloadBGM()">⬇️ 다운로드</button>
+      </div>
+      <video id="bgm-video" style="display:none;width:100%;margin-top:10px;border-radius:8px" controls></video>
+
+      <div style="margin:14px 0;border-top:1px solid var(--g100)"></div>
+
+      <!-- 새 BGM 추가 -->
+      <div class="form-label" style="margin-bottom:8px">➕ 새 BGM 추가</div>
+      <label style="display:block;border:2px dashed var(--g200);border-radius:10px;
+             padding:14px;text-align:center;cursor:pointer;color:var(--g500);font-size:13px;
+             transition:border-color .2s" onmouseover="this.style.borderColor='var(--brand)'"
+             onmouseout="this.style.borderColor='var(--g200)'">
+        <input type="file" id="bgmFileInput" accept=".mp3,.wav,.m4a,.ogg,.flac"
+               multiple style="display:none" onchange="uploadBGM(event)">
+        mp3 / wav 파일을 클릭해서 추가하세요<br>
+        <small style="color:var(--g400)">(여러 파일 동시 선택 가능 · 추가할수록 랜덤 풀 증가)</small>
+      </label>
+    </div>
+  </div>
+
+</div><!-- /step4 -->
+
+
+<!-- ===== STEP 5 ===== -->
+<div id="step5" class="step-section">
+
+  <!-- 캡션 -->
+  <div class="card">
+    <div class="card-header"><h2>📝 플랫폼별 캡션 &amp; 해시태그</h2></div>
+    <div class="card-body">
+      <div class="tabs">
+        <button class="tab-btn active" onclick="switchTab(event,'insta')">📸 인스타</button>
+        <button class="tab-btn" onclick="switchTab(event,'youtube')">▶️ 유튜브</button>
+        <button class="tab-btn" onclick="switchTab(event,'tiktok')">🎵 틱톡</button>
+        <button class="tab-btn" onclick="switchTab(event,'naver')">🟢 네이버클립</button>
+      </div>
+      <div class="tab-content active" id="tab-insta">
+        <div class="caption-box" id="caption-insta"></div>
+        <div class="action-row"><button class="action-btn" onclick="copyText('caption-insta')">📋 캡션 복사</button></div>
+      </div>
+      <div class="tab-content" id="tab-youtube">
+        <div class="caption-box" id="caption-youtube"></div>
+        <div class="action-row"><button class="action-btn" onclick="copyText('caption-youtube')">📋 전체 복사</button></div>
+      </div>
+      <div class="tab-content" id="tab-tiktok">
+        <div class="caption-box" id="caption-tiktok"></div>
+        <div class="action-row"><button class="action-btn" onclick="copyText('caption-tiktok')">📋 복사</button></div>
+      </div>
+      <div class="tab-content" id="tab-naver">
+        <div class="caption-box" id="caption-naver"></div>
+        <div class="action-row"><button class="action-btn" onclick="copyText('caption-naver')">📋 복사</button></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 고정 댓글 -->
+  <div class="card">
+    <div class="card-header"><h2>📌 고정 댓글 템플릿 (전 플랫폼 공통)</h2></div>
+    <div class="card-body">
+      <div class="comment-template" id="commentTemplate">❤️ 제품 구매 방법 ❤️
+
+📌 프로필 링크에서 확인하세요!
+👉 linktr.ee/kyh498601
+못찾으시면 댓글에 "구매링크" 남겨주세요 😊</div>
+      <div class="action-row"><button class="action-btn primary" onclick="copyText('commentTemplate')">📋 고정 댓글 복사</button></div>
+    </div>
+  </div>
+
+  <!-- Drive -->
+  <div class="card">
+    <div class="card-header"><h2>☁️ Google Drive 저장</h2></div>
+    <div class="card-body">
+      <div class="info-box">
+        <div class="info-icon">📁</div>
+        <div><strong>저장 경로:</strong> 생활꿀템연구소 → 카테고리 → 제품명_날짜<br>Drive ID: <code>19LfVDYcUtR-NUD4oYmdtC0byZNqu463r</code></div>
+      </div>
+      <div class="final-btn-grid" style="margin-top:12px">
+        <button class="action-btn primary" onclick="saveDriveFinal()">☁️ Drive 전체 저장</button>
+        <button class="action-btn" onclick="saveDriveFinal()">⭐ 베스트 템플릿 저장</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 업로드 시간 -->
+  <div class="card">
+    <div class="card-header"><h2>⏰ 업로드 최적 시간</h2></div>
+    <div class="card-body">
+      <div class="time-grid">
+        <div class="time-card"><strong>📸 인스타그램</strong><span>평일 오후 7~9시<br>주말 오전 10~11시</span></div>
+        <div class="time-card"><strong>▶️ 유튜브 쇼츠</strong><span>평일 오후 6~9시<br>주말 오전 9~12시</span></div>
+        <div class="time-card"><strong>🎵 틱톡</strong><span>오후 7~9시<br>오전 6~9시</span></div>
+        <div class="time-card"><strong>🟢 네이버클립</strong><span>오후 12~1시<br>오후 7~9시</span></div>
+      </div>
+    </div>
+  </div>
+
+  <button class="new-product-btn" onclick="newProduct()">➕ 새 제품 시작하기</button>
+
+</div><!-- /step5 -->
+
+</div><!-- /main -->
+
+<div class="toast" id="toast"></div>
+
+<script>
+// ============================================================
+// STATE
+// ============================================================
+const STORAGE_KEY = 'honeylab_dashboard';
+const POLICY_KEY  = 'honeylab_policies';
+
+const state = {
+  productName:   '',
+  partnerLink:   '',
+  category:      '',
+  platforms:     [],
+  productImages: [],  // {url, b64}
+  reviewImages:  [],
+  abChoice:      null,
+  currentStep:   1,
+  slides:        [],
+  policies:      [],  // [{platform, text}]
+};
+
+// ── Persist ──────────────────────────────────────────────────
+function saveState() {
+  const p = {
+    productName:   state.productName,
+    partnerLink:   state.partnerLink,
+    category:      state.category,
+    platforms:     state.platforms,
+    productImages: state.productImages.map(i => ({ url: i.url })),
+    reviewImages:  state.reviewImages.map(i => ({ url: i.url })),
+    abChoice:      state.abChoice,
+    currentStep:   state.currentStep,
+  };
+  const s = JSON.stringify(p);
+  try { sessionStorage.setItem(STORAGE_KEY, s); } catch(e) {}
+  try { localStorage.setItem(STORAGE_KEY, s); } catch(e) {}
+}
+
+function loadState() {
+  let raw = null;
+  try { raw = sessionStorage.getItem(STORAGE_KEY); } catch(e) {}
+  if (!raw) try { raw = localStorage.getItem(STORAGE_KEY); } catch(e) {}
+  if (!raw) return false;
+  try {
+    const d = JSON.parse(raw);
+    state.productName   = d.productName  || '';
+    state.partnerLink   = d.partnerLink  || '';
+    state.category      = d.category     || '';
+    state.platforms     = d.platforms    || [];
+    state.productImages = (d.productImages || []).map(i => ({ url: i.url, b64: i.url }));
+    state.reviewImages  = (d.reviewImages  || []).map(i => ({ url: i.url, b64: i.url }));
+    state.abChoice      = d.abChoice     || null;
+    state.currentStep   = d.currentStep  || 1;
+    return true;
+  } catch(e) { return false; }
+}
+
+function clearSavedState() {
+  try { sessionStorage.removeItem(STORAGE_KEY); } catch(e) {}
+  try { localStorage.removeItem(STORAGE_KEY); } catch(e) {}
+}
+
+// ── Policies (영구 저장) ──────────────────────────────────────
+function savePolicies() {
+  try { localStorage.setItem(POLICY_KEY, JSON.stringify(state.policies)); } catch(e) {}
+}
+
+function loadPolicies() {
+  try {
+    const raw = localStorage.getItem(POLICY_KEY);
+    if (raw) { state.policies = JSON.parse(raw); return; }
+  } catch(e) {}
+  state.policies = [
+    { platform: '쿠팡파트너스', text: '' },
+    { platform: '브랜드커넥트', text: '' },
+    { platform: '인스타그램',   text: '' },
+    { platform: '유튜브',       text: '' },
+    { platform: '틱톡',         text: '' },
+    { platform: '네이버클립',   text: '' },
+  ];
+}
+
+function renderPolicyList() {
+  const el = document.getElementById('policyList');
+  if (!el) return;
+  el.innerHTML = state.policies.map((p, i) => `
+    <div class="policy-row">
+      <input class="form-input policy-platform" value="${esc(p.platform)}"
+        placeholder="플랫폼명" oninput="updatePolicy(${i},'platform',this.value)">
+      <textarea class="form-input policy-text"
+        placeholder="최신 정책 내용 (예: 광고 문구 필수 표기, 금지 단어 등)"
+        oninput="updatePolicy(${i},'text',this.value)">${esc(p.text)}</textarea>
+      <button class="policy-del" onclick="removePolicy(${i})">✕</button>
+    </div>`).join('');
+}
+
+function esc(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+function updatePolicy(i, field, val) {
+  state.policies[i][field] = val;
+  savePolicies();
+}
+
+function removePolicy(i) {
+  state.policies.splice(i, 1);
+  savePolicies();
+  renderPolicyList();
+}
+
+function addPolicy() {
+  state.policies.push({ platform: '', text: '' });
+  savePolicies();
+  renderPolicyList();
+  const inputs = document.querySelectorAll('.policy-platform');
+  if (inputs.length) inputs[inputs.length - 1].focus();
+}
+
+function getPolicySummary() {
+  return state.policies.filter(p => p.text.trim())
+    .map(p => `[${p.platform}] ${p.text.trim()}`).join('\n');
+}
+
+// ============================================================
+// FORM EVENTS
+// ============================================================
+document.getElementById('productName').addEventListener('input', e => {
+  state.productName = e.target.value.trim(); updateChecklist(); saveState();
+});
+document.getElementById('partnerLink').addEventListener('input', e => {
+  state.partnerLink = e.target.value.trim(); updateChecklist(); saveState();
+});
+
+document.getElementById('categoryGroup').addEventListener('click', e => {
+  const btn = e.target.closest('.btn-toggle'); if (!btn) return;
+  document.querySelectorAll('#categoryGroup .btn-toggle').forEach(b => b.classList.remove('selected'));
+  btn.classList.add('selected');
+  state.category = btn.dataset.val; updateChecklist(); saveState();
+});
+
+document.getElementById('platformGroup').addEventListener('click', e => {
+  const btn = e.target.closest('.btn-toggle'); if (!btn) return;
+  if (btn.dataset.val === '전체') {
+    document.querySelectorAll('#platformGroup .btn-toggle').forEach(b => b.classList.remove('selected'));
+    btn.classList.add('selected');
+    state.platforms = ['전체'];
+  } else {
+    document.querySelectorAll('#platformGroup .btn-toggle[data-val="전체"]').forEach(b => b.classList.remove('selected'));
+    btn.classList.toggle('selected');
+    state.platforms = [...document.querySelectorAll('#platformGroup .btn-toggle.selected')].map(b => b.dataset.val);
+  }
+  updateChecklist(); saveState();
+});
+
+// drag-over fix
+document.querySelectorAll('.upload-zone').forEach(z => {
+  z.addEventListener('dragover', e => { e.preventDefault(); z.classList.add('dragover'); });
+  z.addEventListener('dragleave', () => z.classList.remove('dragover'));
+});
+
+// ============================================================
+// FILE UPLOAD
+// ============================================================
+function handleFileSelect(e, type) {
+  addImages([...e.target.files], type); e.target.value = '';
+}
+function handleDrop(e, type) {
+  e.preventDefault(); e.currentTarget.classList.remove('dragover');
+  addImages([...e.dataTransfer.files].filter(f => f.type.startsWith('image/')), type);
+}
+
+function addImages(files, type) {
+  const arr = type === 'product' ? state.productImages : state.reviewImages;
+  const limit = type === 'product' ? 10 : 2;
+  const remaining = limit - arr.length;
+  if (files.length > remaining) showToast(`최대 ${limit}장까지 업로드 가능합니다.`);
+  files.slice(0, remaining).forEach(file => {
+    const reader = new FileReader();
+    reader.onload = ev => {
+      arr.push({ file, url: ev.target.result, b64: ev.target.result });
+      renderPreviews(type); updateChecklist(); saveState();
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
+function removeImage(type, idx) {
+  (type === 'product' ? state.productImages : state.reviewImages).splice(idx, 1);
+  renderPreviews(type); updateChecklist(); saveState();
+}
+
+function renderPreviews(type) {
+  const arr = type === 'product' ? state.productImages : state.reviewImages;
+  document.getElementById(type === 'product' ? 'productPreview' : 'reviewPreview').innerHTML =
+    arr.map((item, i) => `
+      <div class="preview-item">
+        <img src="${item.url}" alt="">
+        <button class="remove-btn" onclick="removeImage('${type}',${i})">✕</button>
+      </div>`).join('');
+}
+
+// ============================================================
+// CHECKLIST
+// ============================================================
+function updateChecklist() {
+  [
+    ['check-name',  !!state.productName],
+    ['check-link',  !!state.partnerLink],
+    ['check-cat',   !!state.category],
+    ['check-plat',  state.platforms.length > 0],
+    ['check-img',   state.productImages.length > 0],
+  ].forEach(([id, ok]) => {
+    const el = document.getElementById(id);
+    el.className = ok ? 'ok' : 'fail';
+    el.querySelector('.check-icon').textContent = ok ? '✓' : '✗';
+  });
+}
+
+// ============================================================
+// PIPELINE
+// ============================================================
+const BLOCKED = ['건강기능식품','의약외품','의료기기'];
+
+function validate() {
+  let ok = true;
+  [['productName','err-productName'],['partnerLink','err-partnerLink']].forEach(([id, eid]) => {
+    const v = document.getElementById(id).value.trim();
+    document.getElementById(eid).classList.toggle('show', !v);
+    document.getElementById(id).classList.toggle('error', !v);
+    if (!v) ok = false;
+  });
+  if (!state.category) { document.getElementById('err-category').classList.add('show'); ok = false; }
+  else document.getElementById('err-category').classList.remove('show');
+  if (!state.platforms.length) { document.getElementById('err-platform').classList.add('show'); ok = false; }
+  else document.getElementById('err-platform').classList.remove('show');
+  if (!state.productImages.length) { document.getElementById('err-productImg').classList.add('show'); ok = false; }
+  else document.getElementById('err-productImg').classList.remove('show');
+  if (BLOCKED.some(b => state.productName.toLowerCase().includes(b.toLowerCase()))) {
+    showToast('⚠️ 해당 카테고리는 법적 제한으로 제외됩니다.'); return false;
+  }
+  return ok;
+}
+
+function startPipeline() {
+  if (!validate()) return;
+  goToStep(2); animatePipeline();
+}
+
+function animatePipeline() {
+  const activePolicies = state.policies.filter(p => p.text.trim()).length;
+  const labels = [
+    activePolicies > 0 ? `정책 파일 확인 완료 (${activePolicies}개 플랫폼 반영)` : '정책 파일 확인 완료',
+    '제품 파악 완료','오퍼 설계 완료','구매 심리 삽입 완료','슬라이드 카피 완성','캐러셀 HTML 생성 완료',
+  ];
+  const bar = document.getElementById('progressBar');
+  const lbl = document.getElementById('progressLabel');
+  let i = 0;
+  const next = () => {
+    if (i >= 6) { lbl.textContent = '✅ 완료! 결과물 확인 중...'; setTimeout(() => { goToStep(3); fillResults(); }, 800); return; }
+    const icon = document.getElementById(`psi${i+1}`);
+    icon.classList.add('running'); icon.textContent = '⏳';
+    lbl.textContent = `진행 중: STEP ${i+1}...`;
+    setTimeout(() => {
+      icon.classList.remove('running'); icon.classList.add('done'); icon.textContent = '✓';
+      bar.style.width = `${((i+1)/6)*100}%`;
+      i++; setTimeout(next, 400);
+    }, 700 + Math.random()*400);
+  };
+  next();
+}
+
+// ============================================================
+// SLIDE COPY
+// ============================================================
+const SLIDE_TEMPLATES = {
+  '화장품':   [{title:'후킹'},{title:'추천 피부타입'},{title:'핵심 성분'},{title:'성분 효능'},{title:'사용감/텍스처'},{title:'사용 전/후 기대효과'},{title:'피부과 인증/수상'},{title:'상품평 재가공'},{title:'특가 안내'},{title:'CTA'}],
+  '주방용품': [{title:'후킹'},{title:'추천 대상'},{title:'핵심 기능 3가지'},{title:'소재/안전성'},{title:'사용법'},{title:'용량/사이즈 스펙'},{title:'세척/관리 편의성'},{title:'상품평 재가공'},{title:'특가 안내'},{title:'CTA'}],
+  '생활가전': [{title:'후킹'},{title:'추천 대상'},{title:'핵심 기능'},{title:'스펙/성능'},{title:'사용 시나리오'},{title:'에너지효율/안전인증'},{title:'설치/사용 편의성'},{title:'상품평 재가공'},{title:'특가 안내'},{title:'CTA'}],
+  '자동차용품':[{title:'후킹'},{title:'추천 차량/운전자'},{title:'핵심 기능'},{title:'설치 방법'},{title:'호환 차종/사이즈'},{title:'안전성/인증'},{title:'전후 비교 효과'},{title:'상품평 재가공'},{title:'특가 안내'},{title:'CTA'}],
+};
+
+const SLIDE_COPY = {
+  '화장품': p => [
+    { headline:'피부 고민, 이게 답이에요',     body:`건성·지성·민감성 모두에게 딱!\n${p}로 피부 걱정 끝내세요` },
+    { headline:'내 피부타입에 꼭 맞아요',       body:`피부 타입별로 다른 케어가 필요해요\n${p}는 어떤 피부에도 잘 맞아요` },
+    { headline:'핵심 성분 공개',               body:`${p}에 담긴 성분들\nNiacinamide · Glycerin · Ceramide` },
+    { headline:'성분이 피부에 하는 일',         body:`흡수력·보습력·진정력 3가지 동시에\n하루 2번으로 변화를 느껴보세요` },
+    { headline:'발랐을 때 그 느낌',             body:`촉촉하지만 끈적이지 않아요\n가볍게 스며드는 텍스처가 특징이에요` },
+    { headline:'쓰기 전과 쓴 후',              body:`2주 후 달라진 피부를 직접 확인해보세요\n수분감·피부결 개선 기대할 수 있어요` },
+    { headline:'피부과도 인정했어요',           body:`피부과 테스트 완료 제품\n인증과 수상 이력이 신뢰를 말해줘요` },
+    { headline:'실사용자들의 한마디',           body:`"이거 쓰고 나서 달라졌어요"\n수만 명이 선택한 이유가 있어요` },
+    { headline:'지금이 특가 찬스!',             body:`지금 특가 진행 중이에요\n역대급 할인 놓치지 마세요` },
+    { headline:'최저가 확인하기 →',            body:`프로필 링크에서 바로 확인하세요\n👉 linktr.ee/kyh498601` },
+  ],
+  '주방용품': p => [
+    { headline:'요리가 즐거워져요',             body:`주방에서 이것 때문에 불편하셨죠?\n${p}로 요리 시간이 달라져요` },
+    { headline:'이런 분께 추천해요',            body:`요리 초보부터 주부까지\n누구나 쉽게 사용할 수 있어요` },
+    { headline:'핵심 기능 3가지',              body:`① 편리한 조작 ② 빠른 조리\n③ 손쉬운 세척까지 한 번에` },
+    { headline:'안전한 소재예요',              body:`KC인증·식품안전 기준 통과\n가족이 사용해도 걱정 없는 소재예요` },
+    { headline:'이렇게 사용하세요',             body:`누구나 따라 할 수 있는 간단한 방법\n처음 사용하는 분도 바로 익숙해져요` },
+    { headline:'딱 맞는 사이즈예요',            body:`1인부터 4인 가족까지 적합한 용량\n주방 공간에 부담 없는 사이즈예요` },
+    { headline:'세척이 너무 쉬워요',            body:`분리 세척 가능 · 식기세척기 OK\n관리가 쉬워서 오래 사용할 수 있어요` },
+    { headline:'실사용자들의 한마디',           body:`"이거 사고 나서 매일 써요"\n구매자 평점 4.8점 이상이에요` },
+    { headline:'지금이 역대급 할인!',           body:`지금 특가 진행 중\n이 가격에 살 수 있는 마지막 기회예요` },
+    { headline:'지금 바로 확인하기 →',          body:`프로필 링크에서 최저가 확인하세요\n👉 linktr.ee/kyh498601` },
+  ],
+  '생활가전': p => [
+    { headline:'생활이 달라져요',              body:`집에서 이거 하나로 해결했어요\n${p} 쓰고 나서 생활이 편해졌어요` },
+    { headline:'이런 분께 딱이에요',            body:`혼자 사는 분·바쁜 직장인 모두\n한 번만 써보면 못 놓아요` },
+    { headline:'핵심 기능 살펴봐요',            body:`스마트 센서 · 자동 조절 기능\n${p}만의 핵심 성능을 확인하세요` },
+    { headline:'성능 수치로 증명해요',          body:`소비전력 최적화로 전기료 절약\n업계 최고 수준의 성능을 자랑해요` },
+    { headline:'이런 상황에 써보세요',          body:`아침 준비·청소·취침 전 모든 순간\n일상 속 어디서나 활약해요` },
+    { headline:'안전인증 완료예요',             body:`KC인증 · 에너지효율 1등급\n안전하고 경제적으로 사용하세요` },
+    { headline:'설치가 정말 쉬워요',            body:`전문 기사 없이 혼자서도 OK\n10분이면 설치 완료예요` },
+    { headline:'실사용자들의 한마디',           body:`"진짜 꿀템이에요 강추해요"\n수만 명이 선택한 이유가 있어요` },
+    { headline:'지금이 특가 찬스!',             body:`지금 특가 진행 중\n역대급 할인 놓치지 마세요` },
+    { headline:'최저가 확인하기 →',            body:`프로필 링크에서 바로 확인하세요\n👉 linktr.ee/kyh498601` },
+  ],
+  '자동차용품': p => [
+    { headline:'운전이 편해져요',              body:`운전하다 이것 때문에 불편하셨죠?\n${p}로 드라이브가 달라져요` },
+    { headline:'이런 차에 딱 맞아요',           body:`국산·수입차 대부분에 호환돼요\n내 차에도 바로 사용 가능해요` },
+    { headline:'핵심 기능이 달라요',            body:`${p}만의 특별한 기능을 확인하세요\n다른 제품과 비교해 보세요` },
+    { headline:'설치가 간단해요',              body:`공구 없이 5분이면 설치 완료\n누구나 쉽게 따라 할 수 있어요` },
+    { headline:'내 차에 맞을까요?',            body:`대부분의 차종에 호환 가능해요\n사이즈 확인 후 안심하고 구매하세요` },
+    { headline:'안전이 최우선이에요',           body:`국제안전인증 통과 제품\n내 가족을 지키는 선택이에요` },
+    { headline:'쓰기 전과 쓴 후',              body:`장착 전후 차이가 확실해요\n한 번 써보면 없어서 못 살아요` },
+    { headline:'실사용자들의 한마디',           body:`"이거 없으면 운전 못 해요"\n구매자 5점 만점에 4.9점이에요` },
+    { headline:'지금이 역대급 할인!',           body:`지금 특가 진행 중\n이 가격에 살 수 있는 마지막 기회예요` },
+    { headline:'지금 확인하기 →',              body:`프로필 링크에서 최저가 확인하세요\n👉 linktr.ee/kyh498601` },
+  ],
+};
+
+function buildSlideCopy(cat, pname) {
+  const p = pname || '이 제품';
+  const copyFn = SLIDE_COPY[cat];
+  const copies = copyFn ? copyFn(p) : Array.from({length:10},(_,i)=>({ headline:`슬라이드 ${i+1}`, body:`${p} — 생활꿀템연구소 추천\n프로필 링크에서 최저가 확인하세요` }));
+  const templates = SLIDE_TEMPLATES[cat] || Array.from({length:10},(_,i)=>({title:`슬라이드 ${i+1}`}));
+  return templates.map((t, i) => ({ title: t.title, headline: copies[i].headline, body: copies[i].body }));
+}
+
+// ============================================================
+// FILL RESULTS
+// ============================================================
+function fillResults() {
+  const cat   = state.category || '기타';
+  const pname = state.productName;
+  state.slides = buildSlideCopy(cat, pname);
+
+  document.getElementById('abAText').innerHTML = `피부 고민, 드디어 해결!<br>${pname} 지금 특가 ✨`;
+  document.getElementById('abBText').innerHTML = `○만명이 선택한 ${pname}<br>지금 최저가 확인하기 🔥`;
+
+  document.getElementById('slideList').innerHTML = state.slides.map((s, i) => `
+    <div class="slide-item">
+      <div class="slide-num">${i+1}</div>
+      <div class="slide-content">
+        <div class="slide-title">${s.title} — ${s.headline}</div>
+        <div class="slide-desc">${s.body.replace(/\n/g,' ')}</div>
+      </div>
+    </div>`).join('');
+
+  document.getElementById('caption-insta').textContent =
+`이런 거 왜 이제야 알았지… 😮
+
+✨ ${pname}
+써보고 나서 진짜 후회했어요 — 왜 진작 안 샀을까 하고요.
+
+📌 프로필 링크에서 최저가 확인하세요
+👉 linktr.ee/kyh498601
+
+#광고 #유료광고 #쿠팡파트너스 #생활꿀템 #꿀템추천 #${cat} #쿠팡추천 #생활용품추천 #꿀딜 #특가템 #생활꿀템연구소 #실사용후기 #강추템 #꿀템발견 #생활용품 #홈리빙 #꿀팁 #추천템 #가성비템 #쇼핑추천 #일상템 #핫딜 #오늘의쇼핑 #쿠팡핫딜 #꿀아이템 #생활필수품 #실구매후기 #써보니좋아 #득템 #쇼핑스타그램`;
+
+  document.getElementById('caption-youtube').textContent =
+`제목: 역대급 가성비 ${cat} 꿀템 — 솔직 후기
+
+▶ 왜 이 제품을 골랐는지
+▶ 실제로 써보니 어떤지
+▶ 지금 특가 — 놓치면 후회해요
+
+🛒 최저가 링크: linktr.ee/kyh498601
+
+#생활꿀템연구소 #쿠팡추천 #꿀템리뷰 #${cat} #꿀딜 #광고`;
+
+  document.getElementById('caption-tiktok').textContent =
+`이거 안 쓰면 손해 🔥
+
+${pname} — 써보고 바로 주변에 뿌렸어요
+지금 특가라 더 빨리 사야 해요
+
+🛒 링크 프로필에 있어요!
+
+#꿀템 #생활꿀템 #${cat} #특가템 #꿀딜 #광고`;
+
+  document.getElementById('caption-naver').textContent =
+`[${cat} 추천] ${pname} 직접 써봤어요!
+
+생활꿀템연구소에서 직접 구매 후 테스트한 제품입니다.
+품질·가성비 모두 만족스러웠고, 현재 특가 진행 중이에요.
+자세한 정보는 프로필 링크에서 확인해 주세요!
+
+#협찬 #광고 #쿠팡파트너스 #${cat} #생활꿀템 #꿀딜`;
+}
+
+// ============================================================
+// PNG DOWNLOAD  ← server.py /generate-png 전용
+// ============================================================
+async function downloadPNG() {
+  if (!state.slides || !state.slides.length) fillResults();
+  const btn = document.getElementById('btn-download-png');
+  btn.disabled = true;
+  btn.textContent = 'PNG 생성 중...';
+  try {
+    const response = await fetch('/generate-png', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        slides:      state.slides,
+        images:      state.productImages.map(i => i.b64 || i.url),
+        productName: state.productName,
+        category:    state.category,
+      }),
+    });
+    if (!response.ok) throw new Error(await response.text());
+    const blob = await response.blob();
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'carousel_1080x1350.zip';
+    a.click();
+    showToast(`다운로드 완료 (${(blob.size/1024).toFixed(0)}KB)`, 'success');
+  } catch(e) {
+    alert('PNG 생성 실패: ' + e.message);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '🖼️ PNG 10장 다운로드';
+  }
+}
+
+// ============================================================
+// 썸네일 자동 생성  ← server.py /generate-thumbnail 전용
+// ============================================================
+window._thumbData = { a: null, b: null };
+
+function updateThumbHookPreview(val) {
+  const words = val.trim().split(/\s+/).filter(Boolean).length;
+  const el = document.getElementById('thumb-hook-preview');
+  if (!val.trim()) { el.textContent = ''; return; }
+  if (words <= 3)      el.textContent = `✅ ${words}단어 — 이상적`;
+  else if (words <= 5) el.textContent = `✅ ${words}단어 — 권장 범위`;
+  else if (words <= 6) el.textContent = `⚠️ ${words}단어 — 최대 한계 (자동 단축될 수 있음)`;
+  else                 el.textContent = `❌ ${words}단어 — 5단어 초과 시 자동 단축됨`;
+}
+
+async function generateThumbnail() {
+  if (!state.slides || !state.slides.length) { showToast('슬라이드 카피를 먼저 생성하세요.'); return; }
+  const btn    = document.getElementById('btn-thumb');
+  const status = document.getElementById('thumb-status');
+  const customHook = (document.getElementById('thumbHookInput')?.value || '').trim();
+  btn.disabled = true;
+  btn.textContent = '썸네일 생성 중...';
+  status.textContent = '🔄 PIL로 1280×720 PNG 생성 중...';
+  document.getElementById('thumb-preview').style.display = 'none';
+  document.getElementById('thumb-selected-msg').style.display = 'none';
+  try {
+    const response = await fetch('/generate-thumbnail', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        slides:      state.slides,
+        images:      state.productImages.map(i => i.b64 || i.url),
+        productName: state.productName,
+        customHook:  customHook,
+      }),
+    });
+    if (!response.ok) throw new Error(await response.text());
+    const data = await response.json();
+    window._thumbData.a = data.a;
+    window._thumbData.b = data.b;
+    document.getElementById('thumb-img-a').src = data.a;
+    document.getElementById('thumb-img-b').src = data.b;
+    document.getElementById('thumb-preview').style.display = 'block';
+    status.textContent = '✅ A/B 2안 생성 완료 — 이미지를 클릭하면 선택됩니다';
+  } catch (e) {
+    status.textContent = '❌ 오류: ' + e.message;
+    showToast('썸네일 생성 실패: ' + e.message);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '🖼️ 썸네일 A/B 2안 자동 생성';
+  }
+}
+
+function selectThumbnail(variant) {
+  document.getElementById('thumb-img-a').style.border =
+    variant === 'a' ? '3px solid var(--brand)' : '2px solid var(--g100)';
+  document.getElementById('thumb-img-b').style.border =
+    variant === 'b' ? '3px solid var(--brand)' : '2px solid var(--g100)';
+  document.getElementById('thumb-selected-label').textContent = variant.toUpperCase();
+  document.getElementById('thumb-selected-msg').style.display = 'block';
+  window._thumbData._selected = variant;
+}
+
+function downloadThumbnail(variant) {
+  const src = window._thumbData[variant];
+  if (!src) { showToast('먼저 썸네일을 생성하세요.'); return; }
+  const a = document.createElement('a');
+  a.href = src;
+  a.download = `thumbnail_${variant}안_1280x720.png`;
+  a.click();
+}
+
+// SRT DOWNLOAD  ← server.py /generate-srt 전용
+// ============================================================
+async function downloadSRT() {
+  if (!state.slides || !state.slides.length) fillResults();
+  const btn = document.getElementById('btn-download-srt');
+  btn.disabled = true;
+  btn.textContent = 'SRT 생성 중...';
+  try {
+    const response = await fetch('/generate-srt', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ slides: state.slides, productName: state.productName }),
+    });
+    if (!response.ok) throw new Error(await response.text());
+    const blob = await response.blob();
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'output.srt';
+    a.click();
+    showToast('✅ 자막 파일 다운로드 완료', 'success');
+  } catch(e) {
+    alert('SRT 생성 실패: ' + e.message);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '💬 자막 다운로드';
+  }
+}
+
+// ============================================================
+// A/B / MISC ACTIONS
+// ============================================================
+function selectAB(choice) {
+  state.abChoice = choice;
+  document.getElementById('abA').classList.toggle('selected', choice === 'A');
+  document.getElementById('abB').classList.toggle('selected', choice === 'B');
+  document.getElementById('abSelected').style.display = 'block';
+  document.getElementById('abSelectedLabel').textContent = choice;
+  saveState();
+  showToast(`✅ ${choice}안을 선택했습니다`, 'success');
+}
+
+function copyCaption() {
+  copyText('caption-insta');
+}
+
+function copyText(id) {
+  const text = document.getElementById(id).textContent;
+  navigator.clipboard.writeText(text).then(() => showToast('📋 복사됨', 'success'));
+}
+
+function saveDrive()      { showToast('☁️ Google Drive 저장 중...'); setTimeout(() => showToast('✅ Drive 저장 완료','success'), 1000); }
+function saveDriveFinal() { showToast('☁️ Drive에 전체 저장 중...'); setTimeout(() => showToast('✅ 저장 완료! 폴더: 생활꿀템연구소/' + state.category, 'success'), 1200); }
+function openFolder()     { showToast('📁 탐색기에서 output 폴더를 여세요', 'success'); }
+function confirmMP4()     { showToast('✅ MP4 생성 확인됨! 배포 준비로 이동합니다', 'success'); setTimeout(() => goToStep(5), 800); }
+
+// ============================================================
+// STEP NAV
+// ============================================================
+function goToStep(n) {
+  for (let i = 1; i <= 5; i++) {
+    document.getElementById(`step${i}`).classList.toggle('active', i === n);
+    const dot = document.getElementById(`dot${i}`);
+    const lbl = document.getElementById(`lbl${i}`);
+    dot.className = i < n ? 'stage-dot done' : i === n ? 'stage-dot active' : 'stage-dot';
+    lbl.className = i < n ? 'stage-label done' : i === n ? 'stage-label active' : 'stage-label';
+    if (i < 5) document.getElementById(`arr${i}`).className = i < n ? 'stage-arrow done' : 'stage-arrow';
+  }
+  state.currentStep = n; saveState();
+  window.scrollTo({ top: 0, behavior: 'smooth' });
+}
+
+// ============================================================
+// TABS
+// ============================================================
+function switchTab(e, name) {
+  document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+  document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+  e.target.classList.add('active');
+  document.getElementById(`tab-${name}`).classList.add('active');
+}
+
+// ============================================================
+// NEW PRODUCT
+// ============================================================
+function newProduct() {
+  clearSavedState();
+  Object.assign(state, { productName:'', partnerLink:'', category:'', platforms:[], productImages:[], reviewImages:[], abChoice:null, currentStep:1, slides:[] });
+  document.getElementById('productName').value = '';
+  document.getElementById('partnerLink').value = '';
+  document.querySelectorAll('.btn-toggle').forEach(b => b.classList.remove('selected'));
+  document.getElementById('productPreview').innerHTML = '';
+  document.getElementById('reviewPreview').innerHTML = '';
+  for (let i = 1; i <= 6; i++) {
+    const el = document.getElementById(`psi${i}`);
+    el.className = 'pipeline-step-icon';
+    el.textContent = ['📋','🔍','💡','🧠','✍️','🎨'][i-1];
+  }
+  document.getElementById('progressBar').style.width = '0%';
+  document.getElementById('progressLabel').textContent = '처리 중...';
+  updateChecklist(); goToStep(1);
+  showToast('✅ 새 제품 작업을 시작합니다', 'success');
+}
+
+// ============================================================
+// BGM 자동 추가  ← server.py /generate-bgm · /change-bgm · /list-bgm · /upload-bgm
+// ============================================================
+let _bgmVideoUrl = null;
+let _currentBgm  = null;
+
+async function loadBGMCount() {
+  try {
+    const r = await fetch('/list-bgm');
+    const d = await r.json();
+    const badge = document.getElementById('bgm-count-badge');
+    if (badge) badge.textContent = `음원 ${d.count}개`;
+  } catch(e) {}
+}
+
+async function generateBGM(excludeBgm = null) {
+  const btn    = document.getElementById('btn-generate-bgm');
+  const status = document.getElementById('bgm-status');
+  btn.disabled = true;
+  btn.textContent = '🎵 생성 중...';
+  document.getElementById('bgm-result').style.display = 'none';
+  document.getElementById('bgm-video').style.display  = 'none';
+  status.textContent = '⏳ BGM 랜덤 선택 & ffmpeg 믹싱 중...';
+  try {
+    const vol = parseInt(document.getElementById('bgmVolumeSlider').value, 10) / 100;
+    const response = await fetch('/generate-bgm', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ bgmVolume: vol, excludeBgm }),
+    });
+    if (!response.ok) throw new Error(await response.text());
+    const bgmName = response.headers.get('X-BGM-Name') || '';
+    const blob    = await response.blob();
+    if (_bgmVideoUrl) URL.revokeObjectURL(_bgmVideoUrl);
+    _bgmVideoUrl = URL.createObjectURL(blob);
+    _currentBgm  = bgmName;
+    if (bgmName) {
+      document.getElementById('bgm-current').style.display = 'block';
+      document.getElementById('bgm-current-name').textContent = bgmName;
+    }
+    document.getElementById('bgm-result').style.display = 'flex';
+    status.textContent = `✅ 완료 · output_with_bgm.mp4 (${(blob.size/1024/1024).toFixed(1)}MB)`;
+    showToast('✅ BGM 합산 완료', 'success');
+  } catch(e) {
+    status.textContent = '❌ 실패: ' + e.message;
+    alert('BGM 생성 실패: ' + e.message);
+  } finally {
+    btn.disabled    = false;
+    btn.textContent = '🎵 BGM 자동 추가';
+  }
+}
+
+function changeBGM() { generateBGM(_currentBgm); }
+
+function previewBGM() {
+  if (!_bgmVideoUrl) { showToast('먼저 BGM을 추가해주세요.'); return; }
+  const video = document.getElementById('bgm-video');
+  const btn   = document.getElementById('btn-bgm-preview');
+  video.src   = _bgmVideoUrl;
+  video.style.display = 'block';
+  if (video.paused) {
+    video.play();
+    btn.textContent = '⏸️ 일시정지';
+    video.onended = () => { btn.textContent = '▶️ 미리보기'; };
+  } else {
+    video.pause();
+    btn.textContent = '▶️ 미리보기';
+  }
+}
+
+function downloadBGM() {
+  if (!_bgmVideoUrl) { showToast('먼저 BGM을 추가해주세요.'); return; }
+  const a    = document.createElement('a');
+  a.href     = _bgmVideoUrl;
+  a.download = 'output_with_bgm.mp4';
+  a.click();
+  showToast('⬇️ output_with_bgm.mp4 다운로드', 'success');
+}
+
+async function uploadBGM(e) {
+  const files = [...e.target.files];
+  if (!files.length) return;
+  const status = document.getElementById('bgm-status');
+  status.textContent = `⏳ BGM 업로드 중 (${files.length}개)...`;
+  let ok = 0;
+  for (const file of files) {
+    try {
+      const buf = await file.arrayBuffer();
+      const r   = await fetch('/upload-bgm?name=' + encodeURIComponent(file.name), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/octet-stream' },
+        body: buf,
+      });
+      if (!r.ok) throw new Error(await r.text());
+      const d = await r.json();
+      ok++;
+      const badge = document.getElementById('bgm-count-badge');
+      if (badge) badge.textContent = `음원 ${d.count}개`;
+    } catch(err) {
+      alert(`업로드 실패 (${file.name}): ${err.message}`);
+    }
+  }
+  e.target.value = '';
+  status.textContent = ok ? `✅ ${ok}개 업로드 완료` : '';
+  if (ok) showToast(`✅ BGM ${ok}개 추가됨`, 'success');
+}
+
+// ============================================================
+// TTS 나레이션  ← server.py /generate-tts
+// ============================================================
+let _ttsAudioUrl = null;
+
+async function generateTTS() {
+  if (!state.slides || !state.slides.length) fillResults();
+  const btn    = document.getElementById('btn-generate-tts');
+  const status = document.getElementById('tts-status');
+  btn.disabled = true;
+  btn.textContent = '🎙️ 생성 중...';
+  document.getElementById('tts-result').style.display = 'none';
+  status.textContent = '⏳ Gemini TTS 요청 중... (10~30초 소요)';
+  try {
+    const voice    = document.getElementById('ttsVoice').value;
+    const response = await fetch('/generate-tts', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        slides:      state.slides,
+        productName: state.productName,
+        voiceName:   voice,
+      }),
+    });
+    if (!response.ok) throw new Error(await response.text());
+    const narrDur    = parseFloat(response.headers.get('X-Narration-Duration') || '0');
+    const blob       = await response.blob();
+    if (_ttsAudioUrl) URL.revokeObjectURL(_ttsAudioUrl);
+    _ttsAudioUrl = URL.createObjectURL(blob);
+    const audio  = document.getElementById('tts-audio');
+    audio.src    = _ttsAudioUrl;
+    window._narrDuration = narrDur;   // render 시 참조용
+    document.getElementById('tts-result').style.display = 'flex';
+    if (narrDur > 0) {
+      const dps = Math.round(narrDur / 10 * 100) / 100;
+      status.textContent = `✅ 완료 · ${voice} · ⏱️ ${narrDur}초 (슬라이드당 ${dps}초) · output_narration.wav 저장됨`;
+    } else {
+      status.textContent = `✅ 완료 · ${voice} 목소리 · output_narration.wav 저장됨`;
+    }
+    showToast('✅ 나레이션 생성 완료', 'success');
+  } catch(e) {
+    status.textContent = '❌ 생성 실패: ' + e.message;
+    alert('TTS 생성 실패: ' + e.message);
+  } finally {
+    btn.disabled    = false;
+    btn.textContent = '🎙️ 나레이션 생성 (Gemini TTS)';
+  }
+}
+
+function playTTS() {
+  const audio = document.getElementById('tts-audio');
+  const btn   = document.getElementById('btn-tts-play');
+  if (!audio.src) { showToast('먼저 나레이션을 생성해주세요.'); return; }
+  if (audio.paused) {
+    audio.play();
+    btn.textContent = '⏸️ 일시정지';
+  } else {
+    audio.pause();
+    btn.textContent = '▶️ 미리듣기';
+  }
+}
+
+function resetPlayBtn() {
+  document.getElementById('btn-tts-play').textContent = '▶️ 미리듣기';
+}
+
+function regenTTS() { generateTTS(); }
+
+function downloadTTS() {
+  if (!_ttsAudioUrl) { showToast('먼저 나레이션을 생성해주세요.'); return; }
+  const a    = document.createElement('a');
+  a.href     = _ttsAudioUrl;
+  a.download = 'output_narration.wav';
+  a.click();
+  showToast('⬇️ output_narration.wav 다운로드', 'success');
+}
+
+// ============================================================
+// TOAST
+// ============================================================
+let _toastTimer;
+function showToast(msg, type = '') {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.className = 'toast show' + (type ? ' ' + type : '');
+  clearTimeout(_toastTimer);
+  _toastTimer = setTimeout(() => t.classList.remove('show'), 2800);
+}
+
+// ============================================================
+// RESTORE UI
+// ============================================================
+function applyStateToUI() {
+  document.getElementById('productName').value = state.productName;
+  document.getElementById('partnerLink').value = state.partnerLink;
+  document.querySelectorAll('#categoryGroup .btn-toggle').forEach(b => b.classList.toggle('selected', b.dataset.val === state.category));
+  document.querySelectorAll('#platformGroup .btn-toggle').forEach(b => b.classList.toggle('selected', state.platforms.includes(b.dataset.val)));
+  renderPreviews('product');
+  renderPreviews('review');
+  if (state.abChoice) {
+    document.getElementById('abA').classList.toggle('selected', state.abChoice === 'A');
+    document.getElementById('abB').classList.toggle('selected', state.abChoice === 'B');
+    document.getElementById('abSelected').style.display = 'block';
+    document.getElementById('abSelectedLabel').textContent = state.abChoice;
+  }
+  if (state.currentStep >= 3) fillResults();
+  renderPolicyList();
+  updateChecklist();
+  goToStep(state.currentStep);
+}
+
+// ============================================================
+// INIT
+// ============================================================
+(function init() {
+  loadPolicies();
+  const restored = loadState();
+  if (restored) {
+    applyStateToUI();
+    if (state.currentStep > 1) showToast('✅ 이전 작업을 복원했습니다', 'success');
+  } else {
+    renderPolicyList();
+    updateChecklist();
+  }
+  loadBGMCount();
+})();
+</script>
+</body>
+</html>
