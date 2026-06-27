@@ -31,7 +31,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlparse, urlencode
 
-from PIL import Image, ImageDraw, ImageFilter, ImageFont
+from PIL import Image, ImageDraw, ImageEnhance, ImageFilter, ImageFont
 
 # ──────────────────────────────────────────────────────────────
 # 상수
@@ -223,6 +223,12 @@ def handle_generate_png(body: bytes) -> bytes:
 
     # base64 -> PIL
     pil_images = [img for img in (b64_to_pil(b) for b in images_b64) if img]
+
+    # 원본 제품 이미지를 파일로 저장 (썸네일 테스트 및 재사용용)
+    if pil_images:
+        orig_path = os.path.join(os.path.dirname(__file__), "product_original.png")
+        pil_images[0].convert("RGB").save(orig_path, format="PNG")
+        print(f"[PNG] 원본 제품 이미지 저장: {orig_path}", flush=True)
 
     if not slides:
         slides = [{"title": f"슬라이드 {i+1}", "headline": "", "body": ""} for i in range(10)]
@@ -609,35 +615,106 @@ def handle_upload_bgm(body: bytes, filename: str) -> bytes:
 
 
 # ──────────────────────────────────────────────────────────────
-# 유튜브 썸네일 생성  (1280 × 720  A안 / B안)
+# 유튜브 썸네일 생성 — PIL 기반  (A안 / B안)  1280×720
+#
+# 스킬 적용:
+#   youtube-thumbnail : Hook 최대 5단어, 2색 지배, 포컬 엘리먼트(뱃지), 우하단 금지
+#   graphic-designer  : 고대비 텍스트, 1개 액센트 컬러, 의도적 레이아웃
+#   frontend-design   : 대담한 구성, 비대칭 레이아웃, 브랜드 일관성
 # ──────────────────────────────────────────────────────────────
-TW, TH = 1280, 720           # 유튜브 썸네일 해상도
-C_GOLD  = (255, 215,   0)    # #FFD700 — 강조 골드
-C_DARK  = ( 20,  60,  35)    # 진한 초록
+
+TW, TH = 1280, 720   # 유튜브 썸네일 고정 해상도
+
+# 썸네일 전용 컬러 팔레트
+_TC_GREEN     = (46, 139,  87)   # #2E8B57 브랜드 그린
+_TC_GREEN_DRK = (13,  43,  26)   # #0D2B1A 딥 다크 그린
+_TC_GOLD      = (255, 215,   0)  # #FFD700 골드
+_TC_RED       = (220,  38,  38)  # #DC2626 임팩트 레드
+_TC_WHITE     = (255, 255, 255)
+_TC_BLACK     = (  0,   0,   0)
+_TC_CREAM     = (252, 250, 245)  # 크림 흰색 (A안 좌측 배경)
 
 
-def _thumb_outline(draw, text, x, y, font, fill, outline, ow=4):
-    """텍스트 외곽선(outline) 렌더링."""
+def _shorten_hook(text: str, max_words: int = 5) -> str:
+    """Hook 문구 최대 5단어로 자동 단축 (youtube-thumbnail 스킬 규칙)."""
+    words = text.split()
+    if len(words) <= max_words:
+        return text
+    return " ".join(words[:max_words]).rstrip("!?.,:;") + "…"
+
+
+def _tw_font(size: int, bold: bool = True) -> ImageFont.FreeTypeFont:
+    try:
+        return ImageFont.truetype(FONT_BOLD if bold else FONT_REG, size)
+    except Exception:
+        return ImageFont.load_default()
+
+
+def _tw_remove_bg(img: Image.Image) -> Image.Image:
+    """rembg로 배경 제거 → 투명 RGBA 반환.
+    알파 임계값(128) 처리로 반투명 잔상 완전 제거.
+    rembg 미설치 또는 오류 시 원본 그대로 반환 (폴백).
+    """
+    try:
+        from rembg import remove as _rembg_remove
+        print("[썸네일] rembg 배경 제거 시작...", flush=True)
+        buf_in = io.BytesIO()
+        img.convert("RGBA").save(buf_in, format="PNG")
+        result = _rembg_remove(buf_in.getvalue())
+        out = Image.open(io.BytesIO(result)).convert("RGBA")
+        r, g, b, a = out.split()
+        # 1단계: 확실한 배경(α<30) 완전 제거 → 색번짐 잔상 차단
+        a = a.point(lambda v: 0 if v < 30 else v)
+        # 2단계: 알파 채널만 미세 블러 → 계단 현상 없는 매끄러운 엣지
+        a = a.filter(ImageFilter.GaussianBlur(radius=0.8))
+        # 3단계: 블러로 낮아진 최대값 복원 (엣지 안쪽은 완전 불투명 유지)
+        a = a.point(lambda v: min(255, int(v * 1.15)))
+        print("[썸네일] rembg 완료", flush=True)
+        return Image.merge("RGBA", (r, g, b, a))
+    except ImportError:
+        print("[썸네일] rembg 미설치 → 원본 사용 (pip install rembg[cpu])", flush=True)
+        return img.convert("RGBA")
+    except Exception as e:
+        print(f"[썸네일] rembg 실패 → 원본 사용: {e}", flush=True)
+        return img.convert("RGBA")
+
+
+def _tw_enhance(img: Image.Image) -> Image.Image:
+    """제품 이미지 밝기·대비·선명도 자동 보정 (고선명)."""
+    img = ImageEnhance.Brightness(img).enhance(1.05)
+    img = ImageEnhance.Contrast(img).enhance(1.25)
+    img = ImageEnhance.Sharpness(img).enhance(2.50)   # 선명도 대폭 강화
+    # UnsharpMask로 엣지 추가 강화
+    rgb = img.convert("RGB")
+    rgb = rgb.filter(ImageFilter.UnsharpMask(radius=1.2, percent=180, threshold=2))
+    if img.mode == "RGBA":
+        r, g, b, a = img.split()
+        nr, ng, nb = rgb.split()
+        return Image.merge("RGBA", (nr, ng, nb, a))
+    return rgb
+
+
+def _tw_fit(src: Image.Image, box_w: int, box_h: int) -> Image.Image:
+    """비율 유지 contain 리사이즈."""
+    sw, sh = src.size
+    scale  = min(box_w / sw, box_h / sh)
+    nw, nh = int(sw * scale), int(sh * scale)
+    return src.resize((nw, nh), Image.LANCZOS)
+
+
+def _tw_outline_text(draw, text, x, y, font, fill, outline, ow=5):
+    """텍스트 + 외곽선 렌더링 (고대비 가독성)."""
     for dx in range(-ow, ow + 1):
         for dy in range(-ow, ow + 1):
             if dx == 0 and dy == 0:
                 continue
-            draw.text((x + dx, y + dy), text, font=font, fill=outline)
+            if abs(dx) + abs(dy) <= ow + 2:
+                draw.text((x + dx, y + dy), text, font=font, fill=outline)
     draw.text((x, y), text, font=font, fill=fill)
 
 
-def _shorten_hook(text: str, max_words: int = 5) -> str:
-    """스킬 규칙: 텍스트는 최대 5단어 후킹 구. 초과 시 자동 단축."""
-    words = text.split()
-    if len(words) <= max_words:
-        return text
-    # 앞 max_words 단어만 — 끝 문장부호 제거 후 … 추가
-    shortened = " ".join(words[:max_words]).rstrip("!?.,:;")
-    return shortened + "…"
-
-
-def _thumb_wrap(draw, text, font, max_w):
-    """단어 단위 줄바꿈 (한글 포함)."""
+def _tw_wrap(draw, text: str, font, max_w: int) -> list[str]:
+    """단어 단위 줄바꿈 (한글/영어 혼합 대응)."""
     words = text.split()
     lines, line = [], ""
     for w in words:
@@ -650,169 +727,229 @@ def _thumb_wrap(draw, text, font, max_w):
             line = w
     if line:
         lines.append(line)
-    # 단어로 못 나눌 경우 글자 단위 fallback
-    if not lines:
-        lines = wrap_text(draw, text, font, max_w)
     return lines or [text]
 
 
-def _render_thumb_a(product_img, hook_text, sub_text):
-    """A안 — 좌측 제품이미지 / 우측 초록 그라디언트 + 대형 텍스트.
-    스킬 규칙: Hook 최대 5단어, 최대 2줄, 우하단 금지, 포컬 엘리먼트 뱃지.
+def _tw_badge_size(font_size: int, label: str) -> tuple[int, int]:
+    """뱃지 (width, height)만 계산 — 드로잉 없음. 위치 결정용."""
+    font   = _tw_font(font_size, bold=True)
+    tmp    = ImageDraw.Draw(Image.new("RGB", (1, 1)))
+    tw     = int(tmp.textlength(label, font=font))
+    pad_x, pad_y = 20, 10
+    return tw + pad_x * 2, font_size + pad_y * 2
+
+
+def _tw_badge(draw, x: int, y: int, label: str,
+              bg_color, text_color=_TC_WHITE, font_size: int = 26):
+    """둥근 모서리 뱃지 렌더링 (텍스트 정중앙 정렬). 반환: (width, height)."""
+    font     = _tw_font(font_size, bold=True)
+    tw       = int(draw.textlength(label, font=font))
+    pad_x, pad_y = 20, 10
+    w, h     = tw + pad_x * 2, font_size + pad_y * 2
+    draw.rounded_rectangle([x, y, x + w, y + h], radius=h // 2, fill=bg_color)
+    # 수평 중앙
+    text_x  = x + (w - tw) // 2
+    # 수직 중앙 — textbbox로 실제 글자 높이 측정 후 offset 보정
+    bbox    = draw.textbbox((0, 0), label, font=font)
+    th      = bbox[3] - bbox[1]
+    text_y  = y + (h - th) // 2 - bbox[1]
+    draw.text((text_x, text_y), label, font=font, fill=text_color)
+    return w, h
+
+
+def _tw_auto_font(draw, text: str, max_w: int, max_lines: int = 2,
+                  size_max: int = 92, size_min: int = 38) -> tuple:
+    """텍스트 길이에 맞는 폰트 크기 자동 결정.
+    size_max → size_min 순으로 줄여가며 max_lines 이내로 들어오는 크기 반환.
+    반환: (font, lines, line_height)
     """
-    # Hook 단어 수 제한 (스킬: 5단어 이상이면 가독성 저하)
-    hook_short = _shorten_hook(hook_text, max_words=5)
+    for size in range(size_max, size_min - 1, -4):
+        font  = _tw_font(size, bold=True)
+        lines = _tw_wrap(draw, text, font, max_w)
+        if len(lines) <= max_lines:
+            return font, lines[:max_lines], int(size * 1.18)
+    # 최소 크기로 강제
+    font  = _tw_font(size_min, bold=True)
+    lines = _tw_wrap(draw, text, font, max_w)[:max_lines]
+    return font, lines, int(size_min * 1.18)
 
-    img = Image.new("RGB", (TW, TH), C_DARK)
 
-    # 좌→우 그라디언트 배경
-    for x in range(TW):
-        r = int(C_DARK[0] + (C_BRAND[0] - C_DARK[0]) * x / TW)
-        g = int(C_DARK[1] + (C_BRAND[1] - C_DARK[1]) * x / TW)
-        b_ch = int(C_DARK[2] + (C_BRAND[2] - C_DARK[2]) * x / TW)
-        ImageDraw.Draw(img).line([(x, 0), (x, TH)], fill=(r, g, b_ch))
+def _tw_center_text(draw, line: str, font, area_x: int, area_w: int) -> int:
+    """텍스트를 area_x~area_x+area_w 내 가운데 정렬한 x 좌표 반환."""
+    tw = int(draw.textlength(line, font=font))
+    return area_x + max(0, (area_w - tw) // 2)
 
-    # 좌측 제품이미지 (contain, 그림자)
-    if product_img:
-        pw, ph = 540, 600
-        px, py = 30, (TH - ph) // 2
-        src = product_img.convert("RGBA")
-        sw, sh = src.size
-        scale = min(pw / sw, ph / sh)
-        nw, nh = int(sw * scale), int(sh * scale)
-        resized = src.resize((nw, nh), Image.LANCZOS)
-        ox, oy = px + (pw - nw) // 2, py + (ph - nh) // 2
-        shadow = Image.new("RGBA", img.size, (0, 0, 0, 0))
-        shadow.paste(Image.new("RGBA", (nw, nh), (0, 0, 0, 120)), (ox + 8, oy + 8))
-        img = Image.alpha_composite(img.convert("RGBA"), shadow).convert("RGB")
-        img_rgba = img.convert("RGBA")
-        img_rgba.paste(resized, (ox, oy), resized)
-        img = img_rgba.convert("RGB")
 
-        # 포컬 엘리먼트: 제품이미지 위 긴박감 뱃지 (스킬: supporting element)
-        draw_pre = ImageDraw.Draw(img)
-        f_urg = _font(22, bold=True)
-        urg = "⚡ 지금 특가"
-        uw = int(draw_pre.textlength(urg, font=f_urg)) + 22
-        uy = oy - 40
-        if uy > 10:
-            draw_pre.rounded_rectangle([ox, uy, ox + uw, uy + 32], radius=6,
-                                       fill=(220, 50, 50))
-            draw_pre.text((ox + 11, uy + 5), urg, font=f_urg, fill=C_WHITE)
+def _render_thumb_a(product_img: Image.Image | None,
+                    hook_text: str, sub_text: str) -> bytes:
+    """A안 — 제품 중심 스플릿 레이아웃.
 
+    좌측 55%: 흰색 배경 + 제품 이미지 크고 선명 (밝기/대비 보정)
+    우측 45%: #2E8B57 브랜드 그린 + 대형 흰색 Hook 텍스트 (가운데 정렬)
+    뱃지: 🔥 BEST 추천 (골드, 우측 상단 가운데 정렬)
+    하단: 전체 폭 골드 브랜드 바
+    """
+    img  = Image.new("RGB", (TW, TH), _TC_WHITE)
     draw = ImageDraw.Draw(img)
-    tx = 610
 
-    # 상단 뱃지 (포컬 엘리먼트 강화)
-    f_badge = _font(26, bold=True)
-    badge = "🔥 BEST 추천"
-    bw = int(draw.textlength(badge, font=f_badge)) + 26
-    draw.rounded_rectangle([tx, 48, tx + bw, 92], radius=8, fill=C_GOLD)
-    draw.text((tx + 13, 56), badge, font=f_badge, fill=(20, 20, 20))
+    BAR_H   = 58
+    split_x = int(TW * 0.55)
 
-    # Hook 텍스트 — 최대 2줄 (스킬: 소형 화면 가독성)
-    f_hook = _font(82, bold=True)
-    hook_lines = _thumb_wrap(draw, hook_short, f_hook, TW - tx - 44)[:2]
-    hy = 108
-    for line in hook_lines:
-        _thumb_outline(draw, line, tx, hy, f_hook,
-                       fill=C_WHITE, outline=(0, 0, 0), ow=4)
-        hy += 100
+    # 우측 브랜드 그린 배경
+    draw.rectangle([split_x, 0, TW, TH], fill=_TC_GREEN)
 
-    # 서브 텍스트 최대 1줄 (스킬: 작은 텍스트 최소화)
+    # 좌우 경계 — 골드 포인트 라인 (3px)
+    draw.rectangle([split_x, 0, split_x + 3, TH], fill=_TC_GOLD)
+
+    # ── 제품 이미지 (좌측 영역, contain 방식, 최대 크기) ─────
+    if product_img:
+        prod   = _tw_enhance(_tw_remove_bg(product_img))
+        PAD    = 12                          # 최소 여백으로 이미지 최대화
+        box_w  = split_x - PAD * 2          # 좌우 PAD 제외
+        box_h  = TH - BAR_H - PAD * 2       # 상하 PAD 모두 제외
+        fitted = _tw_fit(prod, box_w, box_h) # contain: 비율 유지, 잘림 없음
+        fw, fh = fitted.size
+        ox     = PAD + (box_w - fw) // 2     # 좌우 중앙
+        oy     = PAD + (box_h - fh) // 2     # 상하 중앙 (상단 PAD 기준)
+
+        if fitted.mode != "RGBA":
+            fitted = fitted.convert("RGBA")
+        img.paste(fitted, (ox, oy), fitted)
+        draw = ImageDraw.Draw(img)
+
+    # ── 우측 텍스트 영역 ──────────────────────────────────────
+    MARGIN  = 20
+    tx      = split_x + MARGIN        # 텍스트 영역 시작 x
+    text_w  = TW - tx - MARGIN        # 텍스트 영역 너비
+
+    # 뱃지 — 텍스트 영역 좌상단 고정 (좌측 여백 20px, 상단 여백 20px)
+    BADGE_LABEL = "🔥 BEST 추천"
+    _, bh = _tw_badge(draw, tx + 20, 20, BADGE_LABEL,
+                      bg_color=_TC_GOLD, text_color=(20, 60, 20), font_size=28)
+
+    # Hook 텍스트 — 폰트 크기 자동 조절, 최대 2줄, 가운데 정렬
+    f_hook, lines, line_h = _tw_auto_font(draw, hook_text, text_w,
+                                          max_lines=2, size_max=88, size_min=38)
+    total_h = len(lines) * line_h
+    # 뱃지 아래 여백 확보 후 수직 중앙 정렬
+    text_top    = 28 + bh + 16
+    avail_h     = TH - BAR_H - text_top
+    hy          = text_top + max(0, (avail_h - total_h) // 2)
+
+    for line in lines:
+        lx = _tw_center_text(draw, line, f_hook, tx, text_w)
+        _tw_outline_text(draw, line, lx, hy, f_hook,
+                         fill=_TC_WHITE, outline=_TC_BLACK, ow=4)
+        hy += line_h
+
+    # 서브 텍스트 (최대 1줄, 가운데 정렬)
     if sub_text:
-        f_sub = _font(32)
-        sub_short = _shorten_hook(sub_text, max_words=8)  # 서브는 8단어까지
-        sub_lines = _thumb_wrap(draw, sub_short, f_sub, TW - tx - 44)[:1]
-        sy = hy + 14
-        for line in sub_lines:
-            draw.text((tx, sy), line, font=f_sub, fill=(210, 255, 210))
+        f_sub  = _tw_font(28, bold=False)
+        sub_s  = _shorten_hook(sub_text, max_words=8)
+        sub_ln = _tw_wrap(draw, sub_s, f_sub, text_w)[:1]
+        for sl in sub_ln:
+            slx = _tw_center_text(draw, sl, f_sub, tx, text_w)
+            draw.text((slx, hy + 10), sl, font=f_sub, fill=(200, 245, 215))
 
-    # 하단 브랜드 바 (중앙 — 우하단 금지 준수)
-    draw.rectangle([0, TH - 56, TW, TH], fill=C_GOLD)
-    f_brand = _font(30, bold=True)
-    brand = "🍀 생활꿀템연구소"
-    bw2 = int(draw.textlength(brand, font=f_brand))
-    draw.text(((TW - bw2) // 2, TH - 42), brand, font=f_brand, fill=C_DARK)
+    # ── 하단 브랜드 바 (전체 폭, 골드) ───────────────────────
+    draw.rectangle([0, TH - BAR_H, TW, TH], fill=_TC_GOLD)
+    f_brand = _tw_font(32, bold=True)
+    brand   = "🍀 생활꿀템연구소"
+    bw2     = int(draw.textlength(brand, font=f_brand))
+    draw.text(((TW - bw2) // 2, TH - BAR_H + 13), brand,
+              font=f_brand, fill=(20, 60, 35))
 
     buf = io.BytesIO()
     img.save(buf, format="PNG")
     return buf.getvalue()
 
 
-def _render_thumb_b(product_img, hook_text, sub_text):
-    """B안 — 풀블리드 블러 배경 + 중앙 대형 골드 텍스트 + 좌상단 제품썸네일.
-    스킬 규칙: Hook 최대 5단어·2줄, 포컬 엘리먼트(숫자뱃지), 우하단 금지.
-    제품이미지는 좌상단 배치 (우상단은 유튜브 시청시간 아이콘 영역 회피).
+def _render_thumb_b(product_img: Image.Image | None,
+                    hook_text: str, sub_text: str) -> bytes:
+    """B안 — 텍스트 임팩트 레이아웃.
+
+    배경: 다크 그라디언트 (좌 딥블랙 → 우 딥그린)
+    제품 이미지: 우측 60% 크게 배치, 좌측 소프트 페이드
+    좌측: 골드 Hook 텍스트 + 검정 외곽선 (가운데 정렬)
+    뱃지: ⚡ 지금 특가 (레드, 좌측 상단 가운데 정렬)
+    하단: 전체 폭 브랜드 그린 바
     """
-    hook_short = _shorten_hook(hook_text, max_words=5)
-
-    img = Image.new("RGB", (TW, TH), (15, 15, 15))
-
-    # 풀블리드 블러 배경
-    if product_img:
-        src = product_img.convert("RGB")
-        sw, sh = src.size
-        sc = max(TW / sw, TH / sh)
-        bw2, bh2 = int(sw * sc), int(sh * sc)
-        resized = src.resize((bw2, bh2), Image.LANCZOS)
-        cx2, cy2 = (bw2 - TW) // 2, (bh2 - TH) // 2
-        cropped = resized.crop((cx2, cy2, cx2 + TW, cy2 + TH))
-        blurred = cropped.filter(ImageFilter.GaussianBlur(radius=20))
-        dark_layer = Image.new("RGB", (TW, TH), (0, 0, 0))
-        img = Image.blend(blurred, dark_layer, 0.60)
-
-        # 좌상단 제품이미지 (우상단 금지 — 유튜브 시청시간 아이콘 영역)
-        pw, ph = 250, 250
-        px2, py2 = 28, 28
-        th_img = product_img.convert("RGBA")
-        sw2, sh2 = th_img.size
-        sc2 = min(pw / sw2, ph / sh2)
-        nw2, nh2 = int(sw2 * sc2), int(sh2 * sc2)
-        small = th_img.resize((nw2, nh2), Image.LANCZOS)
-        img_rgba = img.convert("RGBA")
-        # 흰 배경 프레임
-        frame = Image.new("RGBA", (nw2 + 10, nh2 + 10), (255, 255, 255, 230))
-        img_rgba.paste(frame, (px2 - 5, py2 - 5))
-        img_rgba.paste(small, (px2 + (pw - nw2) // 2, py2 + (ph - nh2) // 2), small)
-        img = img_rgba.convert("RGB")
-
+    # 배경 — 좌→우 다크 그라디언트
+    img  = Image.new("RGB", (TW, TH), _TC_GREEN_DRK)
     draw = ImageDraw.Draw(img)
+    r0, g0, b0 = _TC_GREEN_DRK
+    r1, g1, b1 = (27, 94, 59)
+    for x in range(TW):
+        t = x / (TW - 1)
+        c = (int(r0 + (r1 - r0) * t),
+             int(g0 + (g1 - g0) * t),
+             int(b0 + (b1 - b0) * t))
+        draw.line([(x, 0), (x, TH)], fill=c)
 
-    # 포컬 엘리먼트: 할인/긴박감 수치 뱃지 (스킬: bold number or prop)
-    f_focal = _font(26, bold=True)
-    focal_text = "최대 50% 할인"
-    fw = int(draw.textlength(focal_text, font=f_focal)) + 28
-    draw.rounded_rectangle([28, 290, 28 + fw, 334], radius=8, fill=(220, 50, 50))
-    draw.text((28 + 14, 298), focal_text, font=f_focal, fill=C_WHITE)
+    BAR_H       = 58
+    img_start_x = int(TW * 0.42)   # 제품이미지 영역 시작 x
+    img_area_w  = TW - img_start_x  # 제품이미지 영역 너비
 
-    # 중앙 Hook 텍스트 — 최대 2줄 (스킬 핵심 규칙)
-    f_hook = _font(96, bold=True)
-    hook_lines = _thumb_wrap(draw, hook_short, f_hook, TW - 120)[:2]
-    total_h = len(hook_lines) * 114
-    hy = (TH - total_h) // 2 - 20
-    for line in hook_lines:
-        tw2 = int(draw.textlength(line, font=f_hook))
-        _thumb_outline(draw, line, (TW - tw2) // 2, hy, f_hook,
-                       fill=C_GOLD, outline=(0, 0, 0), ow=5)
-        hy += 114
+    # ── 제품 이미지 (우측 영역, contain 방식) ───────────────
+    if product_img:
+        prod   = _tw_enhance(_tw_remove_bg(product_img))
+        PAD    = 16
+        box_w  = img_area_w - PAD * 2       # 좌우 PAD 제외
+        box_h  = TH - BAR_H - PAD * 2       # 상하 PAD 모두 제외
+        fitted = _tw_fit(prod, box_w, box_h) # contain: 비율 유지, 잘림 없음
+        fw, fh = fitted.size
+        # 우측 영역 좌우·상하 중앙 (우측 경계 클램프)
+        ox     = img_start_x + PAD + (box_w - fw) // 2
+        ox     = min(ox, TW - fw - PAD)   # 우측 잘림 방지
+        oy     = PAD + (box_h - fh) // 2
 
-    # 서브 텍스트 최대 1줄
+        if fitted.mode != "RGBA":
+            fitted = fitted.convert("RGBA")
+
+        # 좌측 25% 소프트 페이드
+        img.paste(fitted, (ox, oy), fitted)
+        draw = ImageDraw.Draw(img)
+
+    # ── 좌측 텍스트 영역 ──────────────────────────────────────
+    MARGIN  = 28
+    tx      = MARGIN
+    text_w  = img_start_x - MARGIN * 2
+
+    # 뱃지 — 텍스트 영역 좌상단 고정 (좌측 여백 20px, 상단 여백 20px)
+    BADGE_LABEL = "⚡ 지금 특가"
+    _, bh = _tw_badge(draw, tx + 20, 20, BADGE_LABEL,
+                      bg_color=_TC_RED, text_color=_TC_WHITE, font_size=26)
+
+    # Hook 텍스트 — 폰트 크기 자동 조절, 최대 2줄, 가운데 정렬, 골드
+    f_hook, lines, line_h = _tw_auto_font(draw, hook_text, text_w,
+                                          max_lines=2, size_max=92, size_min=38)
+    total_h  = len(lines) * line_h
+    text_top = 26 + bh + 18
+    avail_h  = TH - BAR_H - text_top
+    hy       = text_top + max(0, (avail_h - total_h) // 2)
+
+    for line in lines:
+        lx = _tw_center_text(draw, line, f_hook, tx, text_w)
+        _tw_outline_text(draw, line, lx, hy, f_hook,
+                         fill=_TC_GOLD, outline=_TC_BLACK, ow=5)
+        hy += line_h
+
+    # 서브 텍스트 (최대 1줄, 가운데 정렬)
     if sub_text:
-        f_sub = _font(34)
-        sub_short = _shorten_hook(sub_text, max_words=8)
-        sub_lines = _thumb_wrap(draw, sub_short, f_sub, TW - 160)[:1]
-        sy = hy + 12
-        for line in sub_lines:
-            sw3 = int(draw.textlength(line, font=f_sub))
-            draw.text(((TW - sw3) // 2, sy), line, font=f_sub, fill=(240, 240, 240))
+        f_sub  = _tw_font(26, bold=False)
+        sub_s  = _shorten_hook(sub_text, max_words=8)
+        sub_ln = _tw_wrap(draw, sub_s, f_sub, text_w)[:1]
+        for sl in sub_ln:
+            slx = _tw_center_text(draw, sl, f_sub, tx, text_w)
+            draw.text((slx, hy + 10), sl, font=f_sub, fill=(200, 255, 220))
 
-    # 하단 초록 바 (중앙 — 우하단 금지)
-    draw.rectangle([0, TH - 56, TW, TH], fill=C_BRAND)
-    f_brand = _font(30, bold=True)
-    brand = "🍀 생활꿀템연구소  |  프로필 링크에서 구매"
-    bw3 = int(draw.textlength(brand, font=f_brand))
-    draw.text(((TW - bw3) // 2, TH - 42), brand, font=f_brand, fill=C_WHITE)
+    # ── 하단 브랜드 바 (전체 폭, 브랜드 그린) ────────────────
+    draw.rectangle([0, TH - BAR_H, TW, TH], fill=_TC_GREEN)
+    f_brand = _tw_font(30, bold=True)
+    brand   = "🍀 생활꿀템연구소  |  프로필 링크에서 구매"
+    bw2     = int(draw.textlength(brand, font=f_brand))
+    draw.text(((TW - bw2) // 2, TH - BAR_H + 14), brand,
+              font=f_brand, fill=_TC_WHITE)
 
     buf = io.BytesIO()
     img.save(buf, format="PNG")
@@ -820,26 +957,44 @@ def _render_thumb_b(product_img, hook_text, sub_text):
 
 
 def handle_generate_thumbnail(body: bytes) -> bytes:
-    """슬라이드 카피 + 제품이미지로 유튜브 썸네일 A/B 2안 생성."""
+    """PIL 기반 유튜브 썸네일 A/B 2안 생성 (1280×720)."""
     payload      = json.loads(body)
     slides       = payload.get("slides", [])
     images_b64   = payload.get("images", [])
     product_name = payload.get("productName", "")
 
-    # 슬라이드 0 Hook 카피 추출 (customHook 있으면 우선 사용)
     s0          = slides[0] if slides else {}
     auto_hook   = s0.get("headline") or s0.get("title") or product_name or "오늘의 생활꿀템"
     hook_text   = payload.get("customHook", "").strip() or auto_hook
+    hook_short  = _shorten_hook(hook_text, max_words=5)
     sub_text    = (s0.get("body") or "").split(".")[0].strip()
 
-    pil_images  = [img for img in (b64_to_pil(b) for b in images_b64) if img]
-    product_img = pil_images[0] if pil_images else None
+    # 이미지 소스 우선순위:
+    #   1. product_original.png (PNG 생성 시 자동 저장된 원본 제품 이미지)
+    #   2. 요청 body의 images[] 첫 번째
+    product_img = None
+    orig_path   = os.path.join(os.path.dirname(__file__), "product_original.png")
 
-    print(f"[썸네일] hook={hook_text!r:.40}  sub={sub_text!r:.40}", flush=True)
+    if os.path.isfile(orig_path):
+        try:
+            product_img = Image.open(orig_path).convert("RGBA")
+            print(f"[썸네일] 원본 이미지 사용: product_original.png {product_img.size}", flush=True)
+        except Exception as e:
+            print(f"[썸네일] product_original.png 로드 실패({e}) — images[] 로 폴백", flush=True)
 
-    a_bytes = _render_thumb_a(product_img, hook_text, sub_text)
-    b_bytes = _render_thumb_b(product_img, hook_text, sub_text)
-    print(f"[썸네일] A={len(a_bytes)//1024}KB  B={len(b_bytes)//1024}KB", flush=True)
+    if product_img is None:
+        pil_images  = [img for img in (b64_to_pil(b) for b in images_b64) if img]
+        product_img = pil_images[0] if pil_images else None
+        if product_img:
+            print(f"[썸네일] images[0] 사용: {product_img.size}", flush=True)
+        else:
+            print("[썸네일] 제품 이미지 없음 — 텍스트만으로 생성", flush=True)
+
+    print(f"[썸네일] hook={hook_short!r}  PIL 렌더링 시작...", flush=True)
+
+    a_bytes = _render_thumb_a(product_img, hook_short, sub_text)
+    b_bytes = _render_thumb_b(product_img, hook_short, sub_text)
+    print(f"[썸네일] 완료  A={len(a_bytes)//1024}KB  B={len(b_bytes)//1024}KB", flush=True)
 
     result = {
         "a": "data:image/png;base64," + base64.b64encode(a_bytes).decode(),
