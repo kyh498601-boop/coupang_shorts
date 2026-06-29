@@ -22,7 +22,8 @@ export const RemotionRoot: React.FC = () => {
         // calculateMetadata: --props 로 durationPerSlideFrames 전달 시 총 길이 자동 계산
         calculateMetadata={async ({ props }: { props: ShoppingProps }) => ({
           durationInFrames:
-            SLIDE_COUNT * (props.durationPerSlideFrames ?? SLIDE_DURATION_FRAMES),
+            (props.images?.length ?? SLIDE_COUNT) *
+            (props.durationPerSlideFrames ?? SLIDE_DURATION_FRAMES),
         })}
         durationInFrames={SLIDE_COUNT * SLIDE_DURATION_FRAMES}
         fps={FPS}

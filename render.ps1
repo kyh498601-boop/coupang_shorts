@@ -38,11 +38,12 @@ if (Test-Path $narratorWav) {
   $durRaw = & ffprobe -v error -show_entries format=duration -of csv=p=0 $narratorWav 2>$null
   if ($durRaw -and $durRaw -match '[\d.]+') {
     $dur = [double]$durRaw
-    # 나레이션 총 길이 ÷ 슬라이드 수(10) × FPS(30) = 슬라이드당 프레임
-    $dpsFrames = [int][Math]::Ceiling($dur / 10.0 * 30)
+    # 나레이션 총 길이 ÷ 실제 슬라이드 수 × FPS(30) = 슬라이드당 프레임
+    $slideCount = [Math]::Max($pngs.Count, 1)
+    $dpsFrames = [int][Math]::Ceiling($dur / $slideCount * 30)
     $dps = [Math]::Round($dpsFrames / 30.0, 2)
-    Write-Host "⏱️  나레이션 $($dur.ToString('F2'))초  →  슬라이드당 $dps 초 ($dpsFrames 프레임)  →  총 $([Math]::Round($dur,1))초" -ForegroundColor Cyan
-    $propsJson = "{`"durationPerSlideFrames`":$dpsFrames}"
+    Write-Host "⏱️  나레이션 $($dur.ToString('F2'))초 / $slideCount 슬라이드  →  슬라이드당 $dps 초 ($dpsFrames 프레임)" -ForegroundColor Cyan
+    $propsJson = "{`"durationPerSlideFrames`":$dpsFrames,`"slideCount`":$slideCount}"
     $propsFile = [System.IO.Path]::Combine($env:TEMP, "remotion_props_$([System.Guid]::NewGuid().ToString('N').Substring(0,8)).json")
     $utf8NoBom = New-Object System.Text.UTF8Encoding $false
     [System.IO.File]::WriteAllText($propsFile, $propsJson, $utf8NoBom)

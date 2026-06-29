@@ -64,6 +64,14 @@ textarea.form-input{height:auto;padding:10px 14px;resize:vertical}
 .btn-toggle:hover{border-color:var(--brand);color:var(--brand)}
 .btn-toggle.selected{background:var(--brand);border-color:var(--brand);color:#fff}
 
+/* ── Thumbnail picker ── */
+.thumb-pick-item{border:2px solid var(--g200);border-radius:var(--radius-sm);padding:10px;cursor:pointer;transition:border-color .15s,box-shadow .15s;background:var(--g50);position:relative;min-height:80px}
+.thumb-pick-item:hover{border-color:var(--brand)}
+.thumb-pick-item.selected{border-color:var(--brand);box-shadow:0 0 0 3px var(--brand-light)}
+.thumb-pick-label{font-size:11px;font-weight:700;color:var(--g600);margin-bottom:6px;text-align:center}
+.thumb-pick-check{position:absolute;top:6px;right:6px;background:var(--brand);color:#fff;border-radius:50%;width:20px;height:20px;font-size:11px;display:none;align-items:center;justify-content:center;font-weight:700}
+.thumb-pick-item.selected .thumb-pick-check{display:flex}
+
 /* ── Upload ── */
 .upload-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}
 @media(max-width:600px){.upload-grid{grid-template-columns:1fr}}
@@ -753,6 +761,41 @@ textarea.form-input{height:auto;padding:10px 14px;resize:vertical}
     </div>
   </div>
 
+  <!-- 썸네일 A/B 선택 -->
+  <div class="card" id="thumb-select-card">
+    <div class="card-header">
+      <h2>🖼️ 유튜브 썸네일 선택</h2>
+      <span class="badge">A / B 중 선택</span>
+    </div>
+    <div class="card-body">
+      <p style="font-size:12px;color:var(--g500);margin-bottom:12px;line-height:1.6">
+        선택한 썸네일이 YouTube 업로드 시 자동으로 설정됩니다.<br>
+        썸네일이 없으면 STEP 5에서 먼저 생성하세요.
+      </p>
+      <div id="thumb-picker" style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+        <div id="thumb-pick-a" class="thumb-pick-item" onclick="selectThumbnail('a')">
+          <div class="thumb-pick-check">✓</div>
+          <div class="thumb-pick-label">A안</div>
+          <img id="thumb-pick-img-a" style="width:100%;border-radius:4px;display:none">
+          <div id="thumb-pick-empty-a" style="text-align:center;padding:20px 0;font-size:11px;color:var(--g400)">
+            썸네일 없음<br><span style="font-size:10px">STEP 5에서 생성하세요</span>
+          </div>
+        </div>
+        <div id="thumb-pick-b" class="thumb-pick-item" onclick="selectThumbnail('b')">
+          <div class="thumb-pick-check">✓</div>
+          <div class="thumb-pick-label">B안</div>
+          <img id="thumb-pick-img-b" style="width:100%;border-radius:4px;display:none">
+          <div id="thumb-pick-empty-b" style="text-align:center;padding:20px 0;font-size:11px;color:var(--g400)">
+            썸네일 없음<br><span style="font-size:10px">STEP 5에서 생성하세요</span>
+          </div>
+        </div>
+      </div>
+      <div id="thumb-pick-status" style="font-size:12px;margin-top:10px;color:var(--g500);text-align:center">
+        A안 또는 B안을 클릭해 선택하세요 (선택 없으면 기본 썸네일 사용)
+      </div>
+    </div>
+  </div>
+
   <!-- 업로드 정보 편집 -->
   <div class="card">
     <div class="card-header"><h2>✏️ 제목 · 설명 · 태그 편집</h2><span class="badge">YouTube 기준</span></div>
@@ -822,6 +865,13 @@ textarea.form-input{height:auto;padding:10px 14px;resize:vertical}
       <span class="badge" id="yt-privacy-badge">비공개</span>
     </div>
     <div class="card-body">
+      <!-- 선택된 썸네일 미리보기 -->
+      <div id="yt-thumb-preview" style="display:none;margin-bottom:14px">
+        <div style="font-size:11px;font-weight:600;color:var(--g600);margin-bottom:6px">선택된 썸네일</div>
+        <img id="yt-thumb-img" style="width:100%;border-radius:var(--radius-sm);max-height:160px;object-fit:cover">
+        <div id="yt-thumb-variant-label" style="font-size:11px;color:var(--brand);margin-top:4px;font-weight:600"></div>
+      </div>
+
       <div style="background:var(--g50);border-radius:var(--radius-sm);padding:12px 14px;
                   font-size:12px;color:var(--g700);line-height:1.8;margin-bottom:14px">
         <strong id="yt-title-preview">—</strong><br>
@@ -1500,6 +1550,7 @@ function goToStep(n) {
   }
   state.currentStep = n; saveState();
   window.scrollTo({ top: 0, behavior: 'smooth' });
+  if (n === 6) initThumbPicker();
 }
 
 // ============================================================
@@ -1722,6 +1773,35 @@ function downloadTTS() {
 // STEP 6 — 업로드 전 검토
 // ============================================================
 const _uploadPlatforms = new Set(['youtube']);
+let _selectedThumbnail = null; // 'a' | 'b' | null
+
+function selectThumbnail(v) {
+  _selectedThumbnail = v;
+  ['a', 'b'].forEach(x => {
+    document.getElementById(`thumb-pick-${x}`)?.classList.toggle('selected', x === v);
+  });
+  const statusEl = document.getElementById('thumb-pick-status');
+  if (statusEl) {
+    statusEl.textContent = v === 'a' ? '✅ A안 선택됨' : '✅ B안 선택됨';
+    statusEl.style.color = 'var(--brand)';
+  }
+}
+
+function initThumbPicker() {
+  ['a', 'b'].forEach(v => {
+    const img   = document.getElementById(`thumb-pick-img-${v}`);
+    const empty = document.getElementById(`thumb-pick-empty-${v}`);
+    const src   = window._thumbData?.[v];
+    if (src) {
+      if (img)   { img.src = src; img.style.display = 'block'; }
+      if (empty) empty.style.display = 'none';
+    } else {
+      if (img)   img.style.display = 'none';
+      if (empty) empty.style.display = 'block';
+    }
+  });
+  if (_selectedThumbnail) selectThumbnail(_selectedThumbnail);
+}
 
 function toggleUploadPlatform(btn) {
   btn.classList.toggle('selected');
@@ -1784,6 +1864,19 @@ function initUploadStep() {
   document.getElementById('yt-desc-preview').textContent  = desc.slice(0, 120) + (desc.length > 120 ? '…' : '');
   document.getElementById('yt-privacy-badge').textContent = privLabel;
 
+  // 선택된 썸네일 미리보기
+  const thumbPreview = document.getElementById('yt-thumb-preview');
+  const thumbImg     = document.getElementById('yt-thumb-img');
+  const thumbLabel   = document.getElementById('yt-thumb-variant-label');
+  const thumbSrc     = _selectedThumbnail ? window._thumbData?.[_selectedThumbnail] : null;
+  if (thumbSrc && thumbImg) {
+    thumbImg.src = thumbSrc;
+    if (thumbLabel) thumbLabel.textContent = _selectedThumbnail === 'a' ? '🖼️ A안 선택됨' : '🖼️ B안 선택됨';
+    if (thumbPreview) thumbPreview.style.display = 'block';
+  } else {
+    if (thumbPreview) thumbPreview.style.display = 'none';
+  }
+
   // 플랫폼별 카드 표시
   document.getElementById('upload-yt-card').style.display = _uploadPlatforms.has('youtube')   ? '' : 'none';
   document.getElementById('upload-ig-card').style.display = _uploadPlatforms.has('instagram') ? '' : 'none';
@@ -1829,7 +1922,7 @@ async function uploadToYouTube() {
     const r = await fetch('/upload-youtube', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ title, description: desc, tags, privacyStatus: priv }),
+      body: JSON.stringify({ title, description: desc, tags, privacyStatus: priv, thumbnailVariant: _selectedThumbnail }),
     });
     const data = await r.json();
     if (!r.ok) throw new Error(JSON.stringify(data));
@@ -1843,7 +1936,10 @@ async function uploadToYouTube() {
     link.textContent = data.url;
     document.getElementById('yt-result-link-text').textContent = data.url;
     document.getElementById('yt-result').style.display = 'block';
-    showToast('✅ YouTube 업로드 완료!', 'success');
+    const thumbMsg = data.thumbnailUploaded
+      ? ` (썸네일 ${data.thumbnailVariant?.toUpperCase()}안 설정 완료)`
+      : '';
+    showToast(`✅ YouTube 업로드 완료!${thumbMsg}`, 'success');
   } catch(e) {
     clearInterval(fakeTick);
     progBar.style.width = '0%';

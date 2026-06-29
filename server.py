@@ -270,6 +270,30 @@ def _clean(text: str) -> str:
     return text
 
 
+# ── 슬라이드 수 → 타이밍 자동 산정 ────────────────────────────────────────
+# 반환: (ms_per_slide, total_min_sec, total_max_sec)
+def _slide_timing(n: int) -> tuple[int, float, float]:
+    if n <= 3:   return 5000, 15.0, 15.0   # 1~3장: 슬라이드당 5초, 총 15초
+    elif n <= 6: return 4000, 20.0, 25.0   # 4~6장: 슬라이드당 4초, 총 20~25초
+    else:        return 3000, 25.0, 30.0   # 7~10장: 슬라이드당 3초, 총 25~30초
+
+
+_CHARS_PER_SEC = 17.0   # 한국어 TTS 기준 초당 문자 수
+
+# 긴 슬롯(4초 이상)에서 짧은 나레이션을 보완하는 보충 문장
+_SUPPLEMENTS = [
+    "지금 바로 확인해보세요.",
+    "한번 써보시면 알 거예요.",
+    "정말 추천드려요.",
+    "많은 분들이 좋아하세요.",
+    "직접 경험해보시길 바라요.",
+    "놓치지 마세요.",
+    "진짜 대박이에요.",
+    "후회 없을 거예요.",
+    "인증된 제품이에요.",
+    "서두르세요, 특가 곧 끝나요.",
+]
+
 # 슬라이드 인덱스별 완전 독립 나레이션 문장 (카피 텍스트 직접 삽입 안 함)
 # p = 제품명, 각 문장은 구어체로 완결된 독립 문장
 _NARRATION_TEMPLATES = [
@@ -296,21 +320,34 @@ _NARRATION_TEMPLATES = [
 ]
 
 
-def build_narration(slide: dict, product_name: str, idx: int) -> str:
-    """슬라이드 카피는 참고만 하고, 완전 독립된 구어체 나레이션 문장을 반환."""
+def build_narration(slide: dict, product_name: str, idx: int,
+                    sec_per_slide: float = 2.5) -> str:
+    """슬라이드당 허용 시간(sec_per_slide)에 맞게 나레이션 텍스트 자동 조정.
+
+    - 짧은 슬롯(3s): 기본 템플릿 트림
+    - 긴 슬롯(4~5s): 보충 문장 자동 추가 → 시간을 자연스럽게 채움
+    """
     import re
     p = product_name or "이 제품"
 
     template  = _NARRATION_TEMPLATES[idx] if idx < len(_NARRATION_TEMPLATES) else _NARRATION_TEMPLATES[-1]
     narration = template(p)
 
-    # 기호·중복 공백 정리
     narration = re.sub(r"[→#\*_`]", "", narration)
     narration = re.sub(r"\s{2,}", " ", narration).strip()
 
-    # 2.5초 기준 한국어 약 44자 이내 트림
-    if len(narration) > 44:
-        narration = narration[:43].rsplit(" ", 1)[0] + "…"
+    max_chars = int(sec_per_slide * _CHARS_PER_SEC)  # 허용 최대 문자 수
+
+    # 슬롯이 넉넉하고 여백이 있으면 보충 문장 추가
+    if sec_per_slide >= 4.0 and len(narration) < max_chars - 8:
+        supplement = _SUPPLEMENTS[idx % len(_SUPPLEMENTS)]
+        candidate  = narration + " " + supplement
+        if len(candidate) <= max_chars:
+            narration = candidate
+
+    # 초과 시 트림
+    if len(narration) > max_chars:
+        narration = narration[:max_chars - 1].rsplit(" ", 1)[0] + "…"
 
     return narration
 
@@ -319,13 +356,17 @@ def handle_generate_srt(body: bytes) -> bytes:
     payload      = json.loads(body)
     slides       = payload.get("slides", [])
     product_name = payload.get("productName", "")
-    ms_per_slide = 2500  # 슬라이드당 2.5초
+
+    n_slides     = min(len(slides), 10) or 10
+    ms_per_slide, _, _ = _slide_timing(n_slides)
+    sec_per_slide = ms_per_slide / 1000.0
+    print(f"[SRT] 슬라이드 {n_slides}장 → 슬라이드당 {sec_per_slide}초", flush=True)
 
     lines = []
-    for i, slide in enumerate(slides[:10]):
+    for i, slide in enumerate(slides[:n_slides]):
         start     = i * ms_per_slide
         end       = start + ms_per_slide
-        narration = build_narration(slide, product_name, i)
+        narration = build_narration(slide, product_name, i, sec_per_slide)
         lines.append(str(i + 1))
         lines.append(f"{ms_to_srt_time(start)} --> {ms_to_srt_time(end)}")
         lines.append(narration)
@@ -365,17 +406,21 @@ _EMOTION_PREFIX = {
 
 
 def _adjust_wav_speed(wav_path: Path, target_sec: float) -> tuple:
-    """WAV 길이가 목표 초과 시 ffmpeg atempo로 속도 조정. (wav_bytes, 실제초) 반환."""
+    """atempo로 WAV 속도 조정. 빠르게(최대 2.0x)·느리게(최소 0.5x) 모두 지원.
+    목표 대비 ±2% 이내면 조정 생략.
+    """
     actual_sec = _get_audio_duration(wav_path)
     print(f"[TTS] 실제 길이: {actual_sec:.2f}s  목표: {target_sec:.2f}s", flush=True)
 
-    # 목표 이내면 그대로 반환
-    if actual_sec <= target_sec * 1.02:
-        print("[TTS] 속도 조정 불필요", flush=True)
+    ratio = actual_sec / target_sec
+    if abs(ratio - 1.0) <= 0.02:
+        print("[TTS] 속도 조정 불필요 (±2% 이내)", flush=True)
         return wav_path.read_bytes(), actual_sec
 
-    speed = min(round(actual_sec / target_sec, 4), 2.0)   # atempo 최대 2.0
-    print(f"[TTS] 속도 {speed}x 조정 중 (atempo)...", flush=True)
+    # atempo 유효 범위: 0.5 ~ 2.0
+    speed = round(max(0.5, min(ratio, 2.0)), 4)
+    direction = "빠르게" if speed > 1.0 else "느리게"
+    print(f"[TTS] 속도 {speed}x ({direction}) 조정 중...", flush=True)
 
     tmp = wav_path.parent / "_tts_atempo_tmp.wav"
     cmd = ["ffmpeg", "-y", "-i", str(wav_path), "-af", f"atempo={speed}", str(tmp)]
@@ -395,11 +440,17 @@ def handle_generate_tts(body: bytes) -> tuple:
     product_name = payload.get("productName", "")
     voice_name   = payload.get("voiceName", "Kore")
 
+    # 슬라이드 수 기반 타이밍 자동 산정
+    n_slides      = min(len(slides), 10) or 10
+    ms_per_slide, tgt_min, tgt_max = _slide_timing(n_slides)
+    sec_per_slide = ms_per_slide / 1000.0
+    print(f"[TTS] 슬라이드 {n_slides}장 → 슬라이드당 {sec_per_slide}초 / 목표 {tgt_min}~{tgt_max}초", flush=True)
+
     # 나레이션 텍스트 빌드 (SRT와 동일한 build_narration 재사용)
     lines = []
-    for i in range(10):
+    for i in range(n_slides):
         slide     = slides[i] if i < len(slides) else {}
-        narration = build_narration(slide, product_name, i)
+        narration = build_narration(slide, product_name, i, sec_per_slide)
         prefix    = _EMOTION_PREFIX.get(i, "")
         lines.append(f"{prefix}{narration}")
     full_text = "\n\n".join(lines)
@@ -463,8 +514,8 @@ def handle_generate_tts(body: bytes) -> tuple:
     out_path.write_bytes(wav_bytes)
     print(f"[TTS] 저장 완료: {out_path} ({len(wav_bytes)//1024}KB)", flush=True)
 
-    # 숏폼 최적 길이: 25~30초 랜덤 목표, 초과 시 atempo 조정
-    target_sec = random.uniform(25.0, 30.0)
+    # 슬라이드 수 기반 목표 시간으로 atempo 조정 (느리게도 지원)
+    target_sec = random.uniform(tgt_min, tgt_max)
     wav_bytes, actual_sec = _adjust_wav_speed(out_path, target_sec)
     print(f"[TTS] 최종 길이: {actual_sec:.2f}s (목표 {target_sec:.2f}s)", flush=True)
 
@@ -1177,21 +1228,23 @@ def handle_upload_youtube(body: bytes) -> bytes:
     """POST /upload-youtube  — output_with_bgm.mp4를 YouTube에 업로드.
 
     Body JSON:
-      title         str   영상 제목 (최대 100자)
-      description   str   설명 (최대 5000자)
-      tags          list  태그 목록
-      privacyStatus str   "private" | "unlisted" | "public"
+      title             str   영상 제목 (최대 100자)
+      description       str   설명 (최대 5000자)
+      tags              list  태그 목록
+      privacyStatus     str   "private" | "unlisted" | "public"
+      thumbnailVariant  str   "a" | "b" | null  — 선택한 썸네일 자동 업로드
     """
     try:
         from googleapiclient.http import MediaFileUpload
     except ImportError:
         raise ImportError("pip install google-api-python-client")
 
-    payload       = json.loads(body) if body else {}
-    title         = (payload.get("title") or "생활꿀템 추천")[:100]
-    description   = (payload.get("description") or "")[:5000]
-    tags          = payload.get("tags") or []
-    privacy       = payload.get("privacyStatus", "private")
+    payload           = json.loads(body) if body else {}
+    title             = (payload.get("title") or "생활꿀템 추천")[:100]
+    description       = (payload.get("description") or "")[:5000]
+    tags              = payload.get("tags") or []
+    privacy           = payload.get("privacyStatus", "private")
+    thumb_variant     = payload.get("thumbnailVariant")  # "a" | "b" | None
 
     mp4_path = BASE_DIR / "output_with_bgm.mp4"
     if not mp4_path.exists():
@@ -1233,9 +1286,31 @@ def handle_upload_youtube(body: bytes) -> bytes:
 
             video_id = response.get("id", "")
             url      = f"https://www.youtube.com/watch?v={video_id}"
-            print(f"[YouTube] 완료: {url}", flush=True)
+            print(f"[YouTube] 업로드 완료: {url}", flush=True)
+
+            # 썸네일 업로드 (선택된 경우)
+            thumb_uploaded = False
+            if thumb_variant in ("a", "b"):
+                thumb_path = BASE_DIR / f"thumbnail_test_{thumb_variant}.png"
+                if thumb_path.exists():
+                    try:
+                        print(f"[YouTube] 썸네일 업로드 중: {thumb_path.name} ({thumb_variant}안)", flush=True)
+                        youtube.thumbnails().set(
+                            videoId=video_id,
+                            media_body=MediaFileUpload(
+                                str(thumb_path), mimetype="image/png", resumable=False
+                            )
+                        ).execute()
+                        thumb_uploaded = True
+                        print(f"[YouTube] 썸네일 업로드 완료 ({thumb_variant}안)", flush=True)
+                    except Exception as te:
+                        print(f"[YouTube] 썸네일 업로드 실패 (영상은 정상): {te}", flush=True)
+                else:
+                    print(f"[YouTube] 썸네일 파일 없음: {thumb_path}", flush=True)
+
             return json.dumps(
-                {"ok": True, "videoId": video_id, "url": url},
+                {"ok": True, "videoId": video_id, "url": url,
+                 "thumbnailUploaded": thumb_uploaded, "thumbnailVariant": thumb_variant},
                 ensure_ascii=False
             ).encode()
 
