@@ -428,22 +428,50 @@ textarea.form-input{height:auto;padding:10px 14px;resize:vertical}
         <button class="action-btn" onclick="copyCaption()">📋 캡션 복사</button>
         <button class="action-btn" onclick="saveDrive()">☁️ Google Drive 저장</button>
       </div>
-      <div class="divider"></div>
-      <div class="info-box">
-        <div class="info-icon">ℹ️</div>
-        <div>
-          <strong>영상 변환 방법:</strong><br>
-          1. PNG 10장을 아래 폴더에 복사하세요<br>
-          2. render.bat를 실행하세요<br>
-          <div class="path-box">C:\Users\JOEUN\coupang_shorts\shopping-shorts\public\input\</div>
-        </div>
-      </div>
-      <div style="margin-top:12px">
-        <button class="run-btn" onclick="goToStep(4)">▶️ MP4 렌더링 완료 후 다음 단계</button>
-      </div>
     </div>
   </div>
 
+  <!-- 영상 렌더링 카드 -->
+  <div class="card">
+    <div class="card-header">
+      <h2>🎬 영상 렌더링</h2>
+      <span class="badge" id="render-badge">준비</span>
+    </div>
+    <div class="card-body">
+      <p style="font-size:12px;color:var(--g500);margin-bottom:12px;line-height:1.6">
+        PNG 슬라이드 + 나레이션으로 MP4를 자동 생성합니다. Remotion 렌더러 사용.
+      </p>
+      <button class="run-btn" id="btn-render" onclick="startRender()" style="margin-bottom:0">
+        🎬 영상 렌더링 시작
+      </button>
+
+      <!-- 진행 상황 -->
+      <div id="render-progress" style="display:none;margin-top:14px">
+        <div class="progress-wrap"><div class="progress-bar" id="render-prog-bar" style="width:0%"></div></div>
+        <div id="render-status-text" style="font-size:12px;color:var(--g600);margin-top:6px">렌더링 준비 중...</div>
+        <div id="render-log" style="
+          margin-top:10px;background:#1a1a1a;color:#d4d4d4;
+          font-size:11px;font-family:monospace;border-radius:8px;
+          padding:12px;max-height:220px;overflow-y:auto;
+          white-space:pre-wrap;line-height:1.55;word-break:break-all
+        "></div>
+      </div>
+
+      <!-- 완료 -->
+      <div id="render-done" style="display:none;margin-top:12px;padding:12px 14px;background:var(--brand-light);border-radius:var(--radius-sm)">
+        <div style="font-size:13px;font-weight:700;color:var(--brand-dark)">✅ 렌더링 완료!</div>
+        <div style="font-size:12px;color:var(--g600);margin-top:4px">output/shopping-shorts.mp4 생성됨</div>
+        <button class="action-btn primary" onclick="goToStep(4)" style="margin-top:10px">▶️ STEP 4 — BGM 추가하기</button>
+      </div>
+
+      <!-- 실패 -->
+      <div id="render-fail" style="display:none;margin-top:12px;padding:12px 14px;background:#FEF2F2;border-radius:var(--radius-sm)">
+        <div style="font-size:13px;font-weight:700;color:#B91C1C">❌ 렌더링 실패</div>
+        <div style="font-size:12px;color:var(--g600);margin-top:4px">로그를 확인하고 다시 시도하세요.</div>
+        <button class="action-btn" onclick="startRender()" style="margin-top:10px">🔄 다시 시도</button>
+      </div>
+    </div>
+  </div>
 
   <!-- TTS 나레이션 카드 -->
   <div class="card">
@@ -659,6 +687,10 @@ textarea.form-input{height:auto;padding:10px 14px;resize:vertical}
     </div>
   </div>
 
+  <button class="run-btn" id="btn-step4-next" style="display:none;margin-top:8px" onclick="goToStep(5)">
+    📤 STEP 5 — 배포 준비하기
+  </button>
+
 </div><!-- /step4 -->
 
 
@@ -736,7 +768,6 @@ textarea.form-input{height:auto;padding:10px 14px;resize:vertical}
   </div>
 
   <button class="run-btn" style="margin-top:8px" onclick="goToStep(6)">📤 STEP 6 — 업로드 전 검토하기</button>
-  <button class="new-product-btn" onclick="newProduct()">➕ 새 제품 시작하기</button>
 
 </div><!-- /step5 -->
 
@@ -1533,7 +1564,7 @@ async function _uploadToDrive(files = ['all']) {
   }
 }
 function openFolder()     { showToast('📁 탐색기에서 output 폴더를 여세요', 'success'); }
-function confirmMP4()     { showToast('✅ MP4 생성 확인됨! 배포 준비로 이동합니다', 'success'); setTimeout(() => goToStep(5), 800); }
+function confirmMP4()     { showToast('✅ MP4 생성 확인됨!', 'success'); }
 
 // ============================================================
 // STEP NAV
@@ -1626,6 +1657,7 @@ async function generateBGM(excludeBgm = null) {
       document.getElementById('bgm-current-name').textContent = bgmName;
     }
     document.getElementById('bgm-result').style.display = 'flex';
+    document.getElementById('btn-step4-next').style.display = 'block';
     status.textContent = `✅ 완료 · output_with_bgm.mp4 (${(blob.size/1024/1024).toFixed(1)}MB)`;
     showToast('✅ BGM 합산 완료', 'success');
   } catch(e) {
@@ -1952,6 +1984,106 @@ async function uploadToYouTube() {
 }
 
 // ============================================================
+// ============================================================
+// 영상 렌더링  ← /render-video  /render-status
+// ============================================================
+let _renderPollTimer = null;
+let _renderLogOffset = 0;
+
+async function startRender() {
+  const btn = document.getElementById('btn-render');
+  const badge = document.getElementById('render-badge');
+  if (btn.disabled) return;
+
+  btn.disabled = true;
+  btn.textContent = '⏳ 렌더링 중...';
+  document.getElementById('render-progress').style.display = 'block';
+  document.getElementById('render-done').style.display    = 'none';
+  document.getElementById('render-fail').style.display    = 'none';
+  document.getElementById('render-log').textContent       = '';
+  document.getElementById('render-prog-bar').style.width  = '3%';
+  document.getElementById('render-status-text').textContent = '서버에 렌더링 요청 중...';
+  badge.textContent = '렌더링 중';
+  badge.style.cssText = 'background:#FEF9C3;color:#854D0E';
+  _renderLogOffset = 0;
+
+  try {
+    const r = await fetch('/render-video', { method: 'POST' });
+    if (!r.ok) throw new Error(await r.text());
+    if (_renderPollTimer) clearInterval(_renderPollTimer);
+    _renderPollTimer = setInterval(pollRenderStatus, 800);
+  } catch(e) {
+    btn.disabled = false;
+    btn.textContent = '🎬 영상 렌더링 시작';
+    badge.textContent = '오류';
+    badge.style.cssText = 'background:#FEE2E2;color:#B91C1C';
+    showToast('❌ 렌더링 시작 실패: ' + e.message);
+  }
+}
+
+async function pollRenderStatus() {
+  try {
+    const r    = await fetch('/render-status');
+    const data = await r.json();
+
+    // 새 로그 라인 누적 출력
+    const logEl    = document.getElementById('render-log');
+    const newLines = (data.log || []).slice(_renderLogOffset);
+    if (newLines.length) {
+      _renderLogOffset += newLines.length;
+      logEl.textContent += newLines.join('\n') + '\n';
+      logEl.scrollTop = logEl.scrollHeight;
+
+      // 마지막 줄을 상태 텍스트로
+      const last = newLines[newLines.length - 1].replace(/^\s*[\u{1F300}-\u{1FFFF}]?\s*/u, '');
+      if (last) document.getElementById('render-status-text').textContent = last;
+
+      // Remotion 진행률 파싱: "50%" 또는 "Rendering 150/300"
+      for (const ln of newLines) {
+        const pct = ln.match(/\b(\d{1,3})%/);
+        if (pct) {
+          const p = Math.min(parseInt(pct[1]), 95);
+          document.getElementById('render-prog-bar').style.width = p + '%';
+          break;
+        }
+        const frames = ln.match(/(\d+)\s*\/\s*(\d+)/);
+        if (frames) {
+          const p = Math.min(Math.round(parseInt(frames[1]) / parseInt(frames[2]) * 100), 95);
+          document.getElementById('render-prog-bar').style.width = p + '%';
+          break;
+        }
+      }
+    }
+
+    if (data.done) {
+      clearInterval(_renderPollTimer);
+      _renderPollTimer = null;
+      const btn   = document.getElementById('btn-render');
+      const badge = document.getElementById('render-badge');
+      btn.disabled    = false;
+      btn.textContent = '🎬 영상 렌더링 시작';
+
+      if (data.exitCode === 0) {
+        document.getElementById('render-prog-bar').style.width = '100%';
+        document.getElementById('render-done').style.display   = 'block';
+        document.getElementById('render-status-text').textContent = '✅ 렌더링 완료!';
+        badge.textContent = '완료';
+        badge.style.cssText = 'background:#DCFCE7;color:#166534';
+        showToast('✅ 영상 렌더링 완료!', 'success');
+      } else {
+        document.getElementById('render-prog-bar').style.width = '0%';
+        document.getElementById('render-fail').style.display   = 'block';
+        document.getElementById('render-status-text').textContent = '❌ 렌더링 실패 (exitCode=' + data.exitCode + ')';
+        badge.textContent = '실패';
+        badge.style.cssText = 'background:#FEE2E2;color:#B91C1C';
+        showToast('❌ 렌더링 실패 — 로그를 확인하세요');
+      }
+    }
+  } catch(e) {
+    console.error('[render poll]', e);
+  }
+}
+
 // TOAST
 // ============================================================
 let _toastTimer;

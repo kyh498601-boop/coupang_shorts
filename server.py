@@ -40,6 +40,12 @@ PORT     = 3333
 BASE_DIR = Path(__file__).parent
 BGM_DIR  = BASE_DIR / "bgm"
 
+# ── 렌더링 전역 상태 ────────────────────────────────────────────
+import threading as _threading
+_render_lock  = _threading.Lock()
+_render_state: dict = {"running": False, "done": False, "exitCode": None, "log": []}
+_ANSI_RE = __import__("re").compile(r"\x1b\[[0-9;]*[mK]")
+
 W           = 1080
 H           = 1350
 IMG_AREA_H  = 810       # 상단 60%  (제품이미지 끝 y)
@@ -278,7 +284,7 @@ def _slide_timing(n: int) -> tuple[int, float, float]:
     else:        return 3000, 25.0, 30.0   # 7~10장: 슬라이드당 3초, 총 25~30초
 
 
-_CHARS_PER_SEC = 17.0   # 한국어 TTS 기준 초당 문자 수
+_CHARS_PER_SEC = 11.0   # 한국어 TTS 기준 초당 문자 수 (자연 발화 기준)
 
 # 긴 슬롯(4초 이상)에서 짧은 나레이션을 보완하는 보충 문장
 _SUPPLEMENTS = [
@@ -514,10 +520,10 @@ def handle_generate_tts(body: bytes) -> tuple:
     out_path.write_bytes(wav_bytes)
     print(f"[TTS] 저장 완료: {out_path} ({len(wav_bytes)//1024}KB)", flush=True)
 
-    # 슬라이드 수 기반 목표 시간으로 atempo 조정 (느리게도 지원)
-    target_sec = random.uniform(tgt_min, tgt_max)
+    # 전체 WAV를 27초에 맞게 atempo로 일괄 조정
+    target_sec = 27.0
     wav_bytes, actual_sec = _adjust_wav_speed(out_path, target_sec)
-    print(f"[TTS] 최종 길이: {actual_sec:.2f}s (목표 {target_sec:.2f}s)", flush=True)
+    print(f"[TTS] 최종 길이: {actual_sec:.2f}s (목표 {target_sec}s)", flush=True)
 
     return wav_bytes, actual_sec
 
@@ -1191,6 +1197,73 @@ def drive_upload_with_retry(file_paths: list[Path], max_retry: int = 3) -> list[
     return results
 
 
+# ──────────────────────────────────────────────────────────────
+# /render-video  (Remotion 렌더링 — 백그라운드 스레드)
+# /render-status (폴링용 상태 조회)
+# ──────────────────────────────────────────────────────────────
+
+def _run_render_worker() -> None:
+    global _render_state
+    ps1 = BASE_DIR / "render.ps1"
+    cmd = [
+        "powershell", "-ExecutionPolicy", "Bypass",
+        "-File", str(ps1),
+    ]
+    print("[Render] 렌더링 시작...", flush=True)
+    try:
+        proc = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            text=True, encoding="utf-8", errors="replace",
+            cwd=str(BASE_DIR),
+        )
+        for raw_line in proc.stdout:
+            line = _ANSI_RE.sub("", raw_line).rstrip()
+            if not line:
+                continue
+            print(f"[Render] {line}", flush=True)
+            with _render_lock:
+                _render_state["log"].append(line)
+        proc.wait()
+        rc = proc.returncode
+    except Exception as e:
+        rc = -1
+        with _render_lock:
+            _render_state["log"].append(f"[오류] {e}")
+        print(f"[Render] 예외: {e}", flush=True)
+
+    with _render_lock:
+        _render_state["running"] = False
+        _render_state["done"]    = True
+        _render_state["exitCode"] = rc
+    print(f"[Render] 완료 (exitCode={rc})", flush=True)
+
+
+def handle_render_video(body: bytes) -> bytes:
+    """POST /render-video — render.ps1 백그라운드 실행."""
+    global _render_state
+    with _render_lock:
+        if _render_state.get("running"):
+            raise RuntimeError("이미 렌더링이 진행 중입니다. /render-status 로 확인하세요.")
+        _render_state = {"running": True, "done": False, "exitCode": None, "log": []}
+
+    t = _threading.Thread(target=_run_render_worker, daemon=True)
+    t.start()
+    return json.dumps({"ok": True, "message": "렌더링 시작됨"}).encode()
+
+
+def handle_render_status() -> bytes:
+    """GET /render-status — 현재 렌더링 상태와 누적 로그 반환."""
+    with _render_lock:
+        snap = {
+            "running":  _render_state["running"],
+            "done":     _render_state["done"],
+            "exitCode": _render_state["exitCode"],
+            "log":      list(_render_state["log"]),
+        }
+    return json.dumps(snap, ensure_ascii=False).encode()
+
+
 def handle_upload_drive(body: bytes) -> bytes:
     """POST /upload-drive  { "files": ["mp4"|"thumbnail_a"|"thumbnail_b"|"all"] }
     지정 파일을 Drive에 업로드하고 결과 JSON 반환.
@@ -1356,6 +1429,9 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/list-bgm":
             self._send(200, "application/json", handle_list_bgm())
             return
+        if path == "/render-status":
+            self._send(200, "application/json", handle_render_status())
+            return
 
         rel = path.lstrip("/")
         fp  = BASE_DIR / "dashboard.html" if rel in ("", "dashboard.html") else BASE_DIR / rel
@@ -1400,6 +1476,9 @@ class Handler(BaseHTTPRequestHandler):
             elif path == "/generate-thumbnail":
                 thumb_json = handle_generate_thumbnail(body)
                 self._send(200, "application/json", thumb_json)
+            elif path == "/render-video":
+                result_json = handle_render_video(body)
+                self._send(200, "application/json", result_json)
             elif path == "/upload-drive":
                 result_json = handle_upload_drive(body)
                 self._send(200, "application/json", result_json)
