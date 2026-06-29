@@ -1004,33 +1004,33 @@ def handle_generate_thumbnail(body: bytes) -> bytes:
 
 
 # ──────────────────────────────────────────────────────────────
-# Google Drive 업로드  (google-auth, google-api-python-client)
+# Google OAuth2 공통  (Drive + YouTube 통합 인증)
 #
-# 최초 실행: credentials.json 필요 → 브라우저 인증 → token.json 자동 저장
-# 이후 실행: token.json으로 자동 로그인 (만료 시 자동 갱신)
+# 최초 실행: credentials.json → 브라우저 인증 → token.json 자동 저장
+# 이후 실행: token.json 자동 로드·갱신
 #
 # .env 선택 키:
-#   GOOGLE_CREDENTIALS_JSON  = credentials.json 경로 (기본: 서버와 같은 폴더)
-#   GOOGLE_TOKEN_JSON        = token.json 경로     (기본: 서버와 같은 폴더)
-#   GOOGLE_DRIVE_FOLDER_ID   = 업로드 대상 Drive 폴더 ID
+#   GOOGLE_CREDENTIALS_JSON = credentials.json 경로 (기본: 서버 폴더)
+#   GOOGLE_TOKEN_JSON       = token.json 경로       (기본: 서버 폴더)
+#   GOOGLE_DRIVE_FOLDER_ID  = Drive 업로드 폴더 ID
 # ──────────────────────────────────────────────────────────────
 import time
 import mimetypes
 
-_DRIVE_SCOPES = ["https://www.googleapis.com/auth/drive.file"]
+_OAUTH_SCOPES = [
+    "https://www.googleapis.com/auth/drive.file",
+    "https://www.googleapis.com/auth/youtube.upload",
+]
 
 
-def _build_drive_service():
-    """OAuth2 자격증명으로 Drive API 서비스 객체 반환.
-
-    1. token.json 존재 → 로드 후 만료 시 자동 갱신
-    2. token.json 없음 → 브라우저 인증 플로우 실행 → token.json 저장
+def _get_oauth_creds():
+    """OAuth2 자격증명 반환. token.json 자동 저장·갱신.
+    스코프 변경(YouTube 추가 등) 감지 시 자동 재인증.
     """
     try:
         from google.oauth2.credentials import Credentials
         from google.auth.transport.requests import Request
         from google_auth_oauthlib.flow import InstalledAppFlow
-        from googleapiclient.discovery import build
     except ImportError:
         raise ImportError(
             "Google API 패키지가 필요합니다:\n"
@@ -1041,35 +1041,44 @@ def _build_drive_service():
     token_path = Path(_get_env("GOOGLE_TOKEN_JSON") or BASE_DIR / "token.json")
 
     creds = None
-
-    # 저장된 토큰 로드
     if token_path.exists():
-        creds = Credentials.from_authorized_user_file(str(token_path), _DRIVE_SCOPES)
+        creds = Credentials.from_authorized_user_file(str(token_path), _OAUTH_SCOPES)
+        # 저장된 토큰에 필요한 스코프가 없으면 재인증
+        if creds and creds.scopes and not set(_OAUTH_SCOPES).issubset(creds.scopes):
+            print("[OAuth] 스코프 변경 감지 → 재인증 필요", flush=True)
+            creds = None
 
-    # 토큰 없거나 만료됐으면 갱신 또는 재인증
     if not creds or not creds.valid:
         if creds and creds.expired and creds.refresh_token:
-            print("[Drive] 토큰 만료 → 자동 갱신 중...", flush=True)
-            creds.refresh(Request())
+            from google.auth.transport.requests import Request as _Req
+            print("[OAuth] 토큰 만료 → 자동 갱신 중...", flush=True)
+            creds.refresh(_Req())
         else:
             if not creds_path.exists():
                 raise FileNotFoundError(
                     f"credentials.json을 찾을 수 없습니다: {creds_path}\n"
-                    "Google Cloud Console에서 OAuth 클라이언트 ID(데스크톱 앱)를 생성하고\n"
+                    "Google Cloud Console → OAuth 클라이언트 ID(데스크톱 앱) 생성 후\n"
                     "credentials.json을 서버 폴더에 저장하세요."
                 )
-            print("[Drive] 브라우저 인증 시작...", flush=True)
-            flow = InstalledAppFlow.from_client_secrets_file(
-                str(creds_path), _DRIVE_SCOPES
-            )
+            print("[OAuth] 브라우저 인증 시작 (Drive + YouTube)...", flush=True)
+            flow  = InstalledAppFlow.from_client_secrets_file(str(creds_path), _OAUTH_SCOPES)
             creds = flow.run_local_server(port=0, open_browser=True)
-            print("[Drive] 인증 완료.", flush=True)
+            print("[OAuth] 인증 완료.", flush=True)
 
-        # 갱신된 토큰 저장
         token_path.write_text(creds.to_json(), encoding="utf-8")
-        print(f"[Drive] 토큰 저장: {token_path}", flush=True)
+        print(f"[OAuth] 토큰 저장: {token_path}", flush=True)
 
-    return build("drive", "v3", credentials=creds, cache_discovery=False)
+    return creds
+
+
+def _build_drive_service():
+    from googleapiclient.discovery import build
+    return build("drive", "v3", credentials=_get_oauth_creds(), cache_discovery=False)
+
+
+def _build_youtube_service():
+    from googleapiclient.discovery import build
+    return build("youtube", "v3", credentials=_get_oauth_creds(), cache_discovery=False)
 
 
 def _drive_upload_single(service, file_path: Path, folder_id: str) -> dict:
@@ -1161,6 +1170,85 @@ def handle_upload_drive(body: bytes) -> bytes:
 
 
 # ──────────────────────────────────────────────────────────────
+# YouTube 업로드  (YouTube Data API v3)
+# ──────────────────────────────────────────────────────────────
+
+def handle_upload_youtube(body: bytes) -> bytes:
+    """POST /upload-youtube  — output_with_bgm.mp4를 YouTube에 업로드.
+
+    Body JSON:
+      title         str   영상 제목 (최대 100자)
+      description   str   설명 (최대 5000자)
+      tags          list  태그 목록
+      privacyStatus str   "private" | "unlisted" | "public"
+    """
+    try:
+        from googleapiclient.http import MediaFileUpload
+    except ImportError:
+        raise ImportError("pip install google-api-python-client")
+
+    payload       = json.loads(body) if body else {}
+    title         = (payload.get("title") or "생활꿀템 추천")[:100]
+    description   = (payload.get("description") or "")[:5000]
+    tags          = payload.get("tags") or []
+    privacy       = payload.get("privacyStatus", "private")
+
+    mp4_path = BASE_DIR / "output_with_bgm.mp4"
+    if not mp4_path.exists():
+        raise FileNotFoundError(
+            "output_with_bgm.mp4가 없습니다. STEP 4에서 BGM을 먼저 추가하세요."
+        )
+
+    youtube = _build_youtube_service()
+
+    body_req = {
+        "snippet": {
+            "title":       title,
+            "description": description,
+            "tags":        tags,
+            "categoryId":  "22",          # People & Blogs
+            "defaultLanguage": "ko",
+        },
+        "status": {"privacyStatus": privacy},
+    }
+
+    size_mb = mp4_path.stat().st_size / 1024 / 1024
+    print(f"[YouTube] 업로드 시작: {mp4_path.name} ({size_mb:.1f}MB) privacy={privacy}", flush=True)
+
+    last_err = None
+    for attempt in range(1, 4):
+        try:
+            media = MediaFileUpload(
+                str(mp4_path), mimetype="video/mp4",
+                resumable=True, chunksize=5 * 1024 * 1024,
+            )
+            req = youtube.videos().insert(
+                part="snippet,status", body=body_req, media_body=media
+            )
+            response = None
+            while response is None:
+                status, response = req.next_chunk()
+                if status:
+                    print(f"[YouTube] {int(status.progress()*100)}%", flush=True)
+
+            video_id = response.get("id", "")
+            url      = f"https://www.youtube.com/watch?v={video_id}"
+            print(f"[YouTube] 완료: {url}", flush=True)
+            return json.dumps(
+                {"ok": True, "videoId": video_id, "url": url},
+                ensure_ascii=False
+            ).encode()
+
+        except Exception as e:
+            last_err = str(e)
+            print(f"[YouTube] 시도 {attempt}/3 실패: {last_err}", flush=True)
+            if attempt < 3:
+                time.sleep(2 ** attempt)
+
+    raise RuntimeError(f"YouTube 업로드 최종 실패: {last_err}")
+
+
+# ──────────────────────────────────────────────────────────────
 # HTTP Handler
 # ──────────────────────────────────────────────────────────────
 class Handler(BaseHTTPRequestHandler):
@@ -1239,6 +1327,9 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(200, "application/json", thumb_json)
             elif path == "/upload-drive":
                 result_json = handle_upload_drive(body)
+                self._send(200, "application/json", result_json)
+            elif path == "/upload-youtube":
+                result_json = handle_upload_youtube(body)
                 self._send(200, "application/json", result_json)
             else:
                 self._send(404, "text/plain", b"Not Found")

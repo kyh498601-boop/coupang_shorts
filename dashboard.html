@@ -232,6 +232,10 @@ textarea.form-input{height:auto;padding:10px 14px;resize:vertical}
   <div class="stage-item" onclick="goToStep(4)"><div class="stage-dot" id="dot4">4</div><span class="stage-label" id="lbl4">영상 변환</span></div>
   <div class="stage-arrow" id="arr4"></div>
   <div class="stage-item" onclick="goToStep(5)"><div class="stage-dot" id="dot5">5</div><span class="stage-label" id="lbl5">배포 준비</span></div>
+  <div class="stage-arrow" id="arr5"></div>
+  <div class="stage-item" onclick="goToStep(6)"><div class="stage-dot" id="dot6">6</div><span class="stage-label" id="lbl6">업로드 검토</span></div>
+  <div class="stage-arrow" id="arr6"></div>
+  <div class="stage-item" onclick="goToStep(7)"><div class="stage-dot" id="dot7">7</div><span class="stage-label" id="lbl7">업로드 실행</span></div>
 </div>
 
 <div class="main">
@@ -723,9 +727,172 @@ textarea.form-input{height:auto;padding:10px 14px;resize:vertical}
     </div>
   </div>
 
+  <button class="run-btn" style="margin-top:8px" onclick="goToStep(6)">📤 STEP 6 — 업로드 전 검토하기</button>
   <button class="new-product-btn" onclick="newProduct()">➕ 새 제품 시작하기</button>
 
 </div><!-- /step5 -->
+
+
+<!-- ===== STEP 6 : 업로드 전 검토 ===== -->
+<div id="step6" class="step-section">
+
+  <!-- 영상 미리보기 -->
+  <div class="card">
+    <div class="card-header"><h2>🎬 영상 최종 미리보기</h2><span class="badge">확인 후 업로드</span></div>
+    <div class="card-body">
+      <video id="review-video" controls
+             style="width:100%;border-radius:var(--radius-sm);background:#000;max-height:480px;display:none">
+      </video>
+      <button class="action-btn primary" id="btn-load-video"
+              onclick="loadReviewVideo()" style="width:100%;height:42px;margin-bottom:8px">
+        ▶️ 최종 영상 불러오기 (output_with_bgm.mp4)
+      </button>
+      <div style="font-size:11px;color:var(--g500)">
+        BGM이 합쳐진 최종 영상을 확인하세요. 영상이 없으면 STEP 4에서 BGM을 먼저 추가하세요.
+      </div>
+    </div>
+  </div>
+
+  <!-- 업로드 정보 편집 -->
+  <div class="card">
+    <div class="card-header"><h2>✏️ 제목 · 설명 · 태그 편집</h2><span class="badge">YouTube 기준</span></div>
+    <div class="card-body">
+      <div class="form-row">
+        <label class="form-label">영상 제목 <span style="font-size:11px;font-weight:400;color:var(--g500)">(최대 100자)</span></label>
+        <input type="text" class="form-input" id="yt-title" maxlength="100"
+               placeholder="예: 이거 진짜 대박이에요 — 역대급 생활 꿀템 추천">
+        <div style="font-size:11px;color:var(--g500);margin-top:3px">
+          <span id="yt-title-count">0</span>/100자
+        </div>
+      </div>
+      <div class="form-row">
+        <label class="form-label">설명</label>
+        <textarea class="form-input" id="yt-desc" rows="6"
+                  placeholder="영상 설명을 입력하세요. 링크, 해시태그 등을 포함할 수 있습니다."></textarea>
+      </div>
+      <div class="form-row">
+        <label class="form-label">태그 <span style="font-size:11px;font-weight:400;color:var(--g500)">(쉼표로 구분)</span></label>
+        <input type="text" class="form-input" id="yt-tags"
+               placeholder="꿀템, 생활용품, 쿠팡추천, 특가">
+      </div>
+      <div class="form-row">
+        <label class="form-label">공개 설정</label>
+        <select class="form-input" id="yt-privacy">
+          <option value="private" selected>🔒 비공개 (업로드 후 직접 공개)</option>
+          <option value="unlisted">🔗 미등재 (링크 아는 사람만 시청)</option>
+          <option value="public">🌐 공개</option>
+        </select>
+      </div>
+      <button class="action-btn" onclick="autoFillUploadInfo()" style="width:100%;height:38px">
+        🔄 캡션에서 자동 채우기
+      </button>
+    </div>
+  </div>
+
+  <!-- 플랫폼 선택 -->
+  <div class="card">
+    <div class="card-header"><h2>📱 업로드 플랫폼 선택</h2></div>
+    <div class="card-body">
+      <div class="btn-group" id="uploadPlatformGroup">
+        <button class="btn-toggle selected" data-plat="youtube" onclick="toggleUploadPlatform(this)">▶️ YouTube</button>
+        <button class="btn-toggle" data-plat="instagram" onclick="toggleUploadPlatform(this)">📸 Instagram</button>
+        <button class="btn-toggle" data-plat="tiktok" onclick="toggleUploadPlatform(this)">🎵 TikTok</button>
+      </div>
+      <div style="margin-top:12px;font-size:12px;color:var(--g600);line-height:1.8">
+        ▶️ YouTube — API 자동 업로드 지원<br>
+        📸 Instagram · 🎵 TikTok — 캡션 복사 후 수동 업로드 안내
+      </div>
+    </div>
+  </div>
+
+  <button class="run-btn" onclick="goToStep(7); initUploadStep()">
+    📤 STEP 7 — 업로드 실행하기
+  </button>
+
+</div><!-- /step6 -->
+
+
+<!-- ===== STEP 7 : 업로드 실행 ===== -->
+<div id="step7" class="step-section">
+
+  <!-- YouTube -->
+  <div class="card" id="upload-yt-card">
+    <div class="card-header">
+      <h2>▶️ YouTube 업로드</h2>
+      <span class="badge" id="yt-privacy-badge">비공개</span>
+    </div>
+    <div class="card-body">
+      <div style="background:var(--g50);border-radius:var(--radius-sm);padding:12px 14px;
+                  font-size:12px;color:var(--g700);line-height:1.8;margin-bottom:14px">
+        <strong id="yt-title-preview">—</strong><br>
+        <span id="yt-desc-preview" style="color:var(--g500)"></span>
+      </div>
+
+      <div class="progress-wrap" id="yt-progress-wrap" style="display:none;margin-bottom:10px">
+        <div class="progress-bar" id="yt-progress-bar"></div>
+      </div>
+      <div id="yt-status" style="font-size:12px;color:var(--g500);margin-bottom:10px;min-height:18px"></div>
+
+      <button class="run-btn" id="btn-yt-upload" onclick="uploadToYouTube()">
+        ▶️ YouTube에 업로드
+      </button>
+
+      <div id="yt-result" style="display:none;margin-top:14px;padding:14px;
+           background:var(--brand-light);border-radius:var(--radius-sm)">
+        <div style="font-size:13px;font-weight:700;color:var(--brand-dark);margin-bottom:8px">✅ 업로드 완료!</div>
+        <a id="yt-result-link" href="" target="_blank"
+           style="font-size:13px;color:var(--brand);word-break:break-all"></a>
+        <div class="action-row" style="margin-top:10px">
+          <button class="action-btn" onclick="window.open(document.getElementById('yt-result-link').href,'_blank')">
+            🔗 YouTube에서 보기
+          </button>
+          <button class="action-btn" onclick="copyText('yt-result-link-text')">📋 링크 복사</button>
+        </div>
+        <span id="yt-result-link-text" style="display:none"></span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Instagram -->
+  <div class="card" id="upload-ig-card" style="display:none">
+    <div class="card-header"><h2>📸 Instagram 업로드</h2><span class="badge" style="background:#E3F2FD;color:#1565C0">수동 업로드</span></div>
+    <div class="card-body">
+      <div class="info-box" style="background:#FFF3E0;border-color:#FFB74D">
+        <div class="info-icon">ℹ️</div>
+        <div>
+          Instagram API는 비즈니스 계정 전용 심사가 필요합니다.<br>
+          아래 캡션을 복사해 앱에서 직접 업로드하세요.
+        </div>
+      </div>
+      <div style="margin-top:12px">
+        <div class="caption-box" id="ig-caption-preview" style="max-height:140px"></div>
+        <div class="action-row"><button class="action-btn primary" onclick="copyText('ig-caption-preview')">📋 인스타 캡션 복사</button></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- TikTok -->
+  <div class="card" id="upload-tt-card" style="display:none">
+    <div class="card-header"><h2>🎵 TikTok 업로드</h2><span class="badge" style="background:#E3F2FD;color:#1565C0">수동 업로드</span></div>
+    <div class="card-body">
+      <div class="info-box" style="background:#FFF3E0;border-color:#FFB74D">
+        <div class="info-icon">ℹ️</div>
+        <div>
+          TikTok API는 별도 파트너 승인이 필요합니다.<br>
+          아래 캡션을 복사해 앱에서 직접 업로드하세요.
+        </div>
+      </div>
+      <div style="margin-top:12px">
+        <div class="caption-box" id="tt-caption-preview" style="max-height:100px"></div>
+        <div class="action-row"><button class="action-btn primary" onclick="copyText('tt-caption-preview')">📋 틱톡 캡션 복사</button></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="divider"></div>
+  <button class="new-product-btn" onclick="newProduct()">➕ 새 제품 시작하기</button>
+
+</div><!-- /step7 -->
 
 </div><!-- /main -->
 
@@ -1322,13 +1489,14 @@ function confirmMP4()     { showToast('✅ MP4 생성 확인됨! 배포 준비�
 // STEP NAV
 // ============================================================
 function goToStep(n) {
-  for (let i = 1; i <= 5; i++) {
-    document.getElementById(`step${i}`).classList.toggle('active', i === n);
+  for (let i = 1; i <= 7; i++) {
+    const s = document.getElementById(`step${i}`);
+    if (s) s.classList.toggle('active', i === n);
     const dot = document.getElementById(`dot${i}`);
     const lbl = document.getElementById(`lbl${i}`);
-    dot.className = i < n ? 'stage-dot done' : i === n ? 'stage-dot active' : 'stage-dot';
-    lbl.className = i < n ? 'stage-label done' : i === n ? 'stage-label active' : 'stage-label';
-    if (i < 5) document.getElementById(`arr${i}`).className = i < n ? 'stage-arrow done' : 'stage-arrow';
+    if (dot) dot.className = i < n ? 'stage-dot done' : i === n ? 'stage-dot active' : 'stage-dot';
+    if (lbl) lbl.className = i < n ? 'stage-label done' : i === n ? 'stage-label active' : 'stage-label';
+    if (i < 7) { const arr = document.getElementById(`arr${i}`); if (arr) arr.className = i < n ? 'stage-arrow done' : 'stage-arrow'; }
   }
   state.currentStep = n; saveState();
   window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -1548,6 +1716,143 @@ function downloadTTS() {
   a.download = 'output_narration.wav';
   a.click();
   showToast('⬇️ output_narration.wav 다운로드', 'success');
+}
+
+// ============================================================
+// STEP 6 — 업로드 전 검토
+// ============================================================
+const _uploadPlatforms = new Set(['youtube']);
+
+function toggleUploadPlatform(btn) {
+  btn.classList.toggle('selected');
+  const plat = btn.dataset.plat;
+  if (btn.classList.contains('selected')) _uploadPlatforms.add(plat);
+  else _uploadPlatforms.delete(plat);
+}
+
+function loadReviewVideo() {
+  const video = document.getElementById('review-video');
+  const btn   = document.getElementById('btn-load-video');
+  video.src   = '/output_with_bgm.mp4?' + Date.now();
+  video.style.display = 'block';
+  video.load();
+  btn.textContent = '🔄 영상 새로고침';
+  showToast('영상 불러오는 중...', '');
+}
+
+function autoFillUploadInfo() {
+  const pname = state.productName || '생활꿀템';
+  // 제목 자동
+  const titleEl = document.getElementById('yt-title');
+  if (!titleEl.value) {
+    titleEl.value = `이거 진짜 대박이에요 — ${pname} 역대급 특가 꿀템 추천`;
+    document.getElementById('yt-title-count').textContent = titleEl.value.length;
+  }
+  // 설명 자동 (유튜브 캡션에서)
+  const descEl = document.getElementById('yt-desc');
+  if (!descEl.value) {
+    descEl.value = document.getElementById('caption-youtube')?.textContent?.trim() || '';
+  }
+  // 태그 자동
+  const tagsEl = document.getElementById('yt-tags');
+  if (!tagsEl.value) {
+    tagsEl.value = `꿀템, 생활꿀템, ${state.category || '생활용품'}, 쿠팡추천, 특가, 생활꿀템연구소, 광고`;
+  }
+  showToast('✅ 캡션 내용으로 자동 채움', 'success');
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+  const titleEl = document.getElementById('yt-title');
+  if (titleEl) {
+    titleEl.addEventListener('input', () => {
+      document.getElementById('yt-title-count').textContent = titleEl.value.length;
+    });
+  }
+});
+
+// ============================================================
+// STEP 7 — 업로드 실행
+// ============================================================
+function initUploadStep() {
+  // 제목·설명 미리보기 반영
+  const title = document.getElementById('yt-title')?.value || '(제목 없음)';
+  const desc  = document.getElementById('yt-desc')?.value  || '';
+  const priv  = document.getElementById('yt-privacy')?.value || 'private';
+  const privLabel = { private:'🔒 비공개', unlisted:'🔗 미등재', public:'🌐 공개' }[priv] || priv;
+
+  document.getElementById('yt-title-preview').textContent = title;
+  document.getElementById('yt-desc-preview').textContent  = desc.slice(0, 120) + (desc.length > 120 ? '…' : '');
+  document.getElementById('yt-privacy-badge').textContent = privLabel;
+
+  // 플랫폼별 카드 표시
+  document.getElementById('upload-yt-card').style.display = _uploadPlatforms.has('youtube')   ? '' : 'none';
+  document.getElementById('upload-ig-card').style.display = _uploadPlatforms.has('instagram') ? '' : 'none';
+  document.getElementById('upload-tt-card').style.display = _uploadPlatforms.has('tiktok')    ? '' : 'none';
+
+  // 인스타·틱톡 캡션 채우기
+  const igText = document.getElementById('caption-insta')?.textContent?.trim() || '';
+  const ttText = document.getElementById('caption-tiktok')?.textContent?.trim() || '';
+  const igEl   = document.getElementById('ig-caption-preview');
+  const ttEl   = document.getElementById('tt-caption-preview');
+  if (igEl) igEl.textContent = igText;
+  if (ttEl) ttEl.textContent = ttText;
+}
+
+async function uploadToYouTube() {
+  const btn    = document.getElementById('btn-yt-upload');
+  const status = document.getElementById('yt-status');
+  const progWrap = document.getElementById('yt-progress-wrap');
+  const progBar  = document.getElementById('yt-progress-bar');
+
+  const title  = document.getElementById('yt-title')?.value?.trim();
+  const desc   = document.getElementById('yt-desc')?.value?.trim()  || '';
+  const tagsRaw= document.getElementById('yt-tags')?.value?.trim()  || '';
+  const priv   = document.getElementById('yt-privacy')?.value || 'private';
+  const tags   = tagsRaw ? tagsRaw.split(',').map(t => t.trim()).filter(Boolean) : [];
+
+  if (!title) { showToast('제목을 입력해주세요.'); return; }
+
+  btn.disabled    = true;
+  btn.textContent = '⏳ 업로드 중...';
+  progWrap.style.display = 'block';
+  progBar.style.width    = '5%';
+  document.getElementById('yt-result').style.display = 'none';
+  status.textContent = '⏳ YouTube 업로드 중... (파일 크기에 따라 수 분 소요)';
+
+  // 진행률 가짜 애니메이션 (실제 진행률은 서버 로그에서 확인)
+  let fakeProgress = 5;
+  const fakeTick = setInterval(() => {
+    if (fakeProgress < 90) { fakeProgress += 2; progBar.style.width = fakeProgress + '%'; }
+  }, 2000);
+
+  try {
+    const r = await fetch('/upload-youtube', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title, description: desc, tags, privacyStatus: priv }),
+    });
+    const data = await r.json();
+    if (!r.ok) throw new Error(JSON.stringify(data));
+
+    clearInterval(fakeTick);
+    progBar.style.width = '100%';
+    status.textContent  = '✅ 업로드 완료!';
+
+    const link = document.getElementById('yt-result-link');
+    link.href        = data.url;
+    link.textContent = data.url;
+    document.getElementById('yt-result-link-text').textContent = data.url;
+    document.getElementById('yt-result').style.display = 'block';
+    showToast('✅ YouTube 업로드 완료!', 'success');
+  } catch(e) {
+    clearInterval(fakeTick);
+    progBar.style.width = '0%';
+    status.textContent  = '❌ 업로드 실패: ' + e.message;
+    showToast('YouTube 업로드 실패', '');
+  } finally {
+    btn.disabled    = false;
+    btn.textContent = '▶️ YouTube에 업로드';
+  }
 }
 
 // ============================================================
