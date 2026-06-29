@@ -211,6 +211,17 @@ textarea.form-input{height:auto;padding:10px 14px;resize:vertical}
   <div class="header-meta">콘텐츠 자동화 파이프라인<br>@youngho4986 · linktr.ee/kyh498601</div>
 </div>
 
+<!-- ── 보완작업 완료현황 배너 ── -->
+<div style="background:#E8F5E9;border-bottom:1px solid #A5D6A7;padding:10px 24px;display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:12px;color:#1B5E3B">
+  <span style="font-weight:700;margin-right:4px">✅ 자동화 완료현황</span>
+  <span style="background:#fff;border:1px solid #A5D6A7;border-radius:99px;padding:2px 10px">💬 SRT 자막</span>
+  <span style="background:#fff;border:1px solid #A5D6A7;border-radius:99px;padding:2px 10px">🎙️ TTS 나레이션</span>
+  <span style="background:#fff;border:1px solid #A5D6A7;border-radius:99px;padding:2px 10px">🖼️ 유튜브 썸네일</span>
+  <span style="background:#fff;border:1px solid #A5D6A7;border-radius:99px;padding:2px 10px">🎵 BGM 자동추가</span>
+  <span style="background:#fff;border:1px solid #A5D6A7;border-radius:99px;padding:2px 10px">☁️ Drive 업로드</span>
+  <span style="margin-left:auto;color:#4CAF50;font-weight:700">보완 1~5 완료 · v1.5.0</span>
+</div>
+
 <div class="stage-bar">
   <div class="stage-item" onclick="goToStep(1)"><div class="stage-dot active" id="dot1">1</div><span class="stage-label active" id="lbl1">정보 입력</span></div>
   <div class="stage-arrow" id="arr1"></div>
@@ -1278,8 +1289,32 @@ function copyText(id) {
   navigator.clipboard.writeText(text).then(() => showToast('📋 복사됨', 'success'));
 }
 
-function saveDrive()      { showToast('☁️ Google Drive 저장 중...'); setTimeout(() => showToast('✅ Drive 저장 완료','success'), 1000); }
-function saveDriveFinal() { showToast('☁️ Drive에 전체 저장 중...'); setTimeout(() => showToast('✅ 저장 완료! 폴더: 생활꿀템연구소/' + state.category, 'success'), 1200); }
+async function saveDrive() { await _uploadToDrive(['all']); }
+async function saveDriveFinal() { await _uploadToDrive(['all']); }
+
+async function _uploadToDrive(files = ['all']) {
+  showToast('☁️ Google Drive 업로드 중...');
+  try {
+    const r = await fetch('/upload-drive', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ files }),
+    });
+    const data = await r.json();
+    if (!r.ok) throw new Error(JSON.stringify(data));
+    const ok   = data.results.filter(x => x.status === 'ok');
+    const fail = data.results.filter(x => x.status === 'failed');
+    if (fail.length) {
+      showToast(`⚠️ ${ok.length}개 완료, ${fail.length}개 실패`);
+    } else {
+      showToast(`✅ Drive 업로드 완료 (${ok.length}개)`, 'success');
+    }
+    console.log('[Drive 업로드 결과]', data.results);
+  } catch(e) {
+    showToast('❌ Drive 업로드 실패: ' + e.message);
+    console.error(e);
+  }
+}
 function openFolder()     { showToast('📁 탐색기에서 output 폴더를 여세요', 'success'); }
 function confirmMP4()     { showToast('✅ MP4 생성 확인됨! 배포 준비로 이동합니다', 'success'); setTimeout(() => goToStep(5), 800); }
 

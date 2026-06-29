@@ -28,5 +28,9 @@ bgm/**/*.flac
 # Claude 세션 파일
 .claude/
 
+# Google OAuth 인증 파일 (민감 정보)
+credentials.json
+token.json
+
 # public/input 제품 이미지 (사용자 개인 파일)
 public/input/

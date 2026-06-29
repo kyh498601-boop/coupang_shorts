@@ -1004,6 +1004,163 @@ def handle_generate_thumbnail(body: bytes) -> bytes:
 
 
 # ──────────────────────────────────────────────────────────────
+# Google Drive 업로드  (google-auth, google-api-python-client)
+#
+# 최초 실행: credentials.json 필요 → 브라우저 인증 → token.json 자동 저장
+# 이후 실행: token.json으로 자동 로그인 (만료 시 자동 갱신)
+#
+# .env 선택 키:
+#   GOOGLE_CREDENTIALS_JSON  = credentials.json 경로 (기본: 서버와 같은 폴더)
+#   GOOGLE_TOKEN_JSON        = token.json 경로     (기본: 서버와 같은 폴더)
+#   GOOGLE_DRIVE_FOLDER_ID   = 업로드 대상 Drive 폴더 ID
+# ──────────────────────────────────────────────────────────────
+import time
+import mimetypes
+
+_DRIVE_SCOPES = ["https://www.googleapis.com/auth/drive.file"]
+
+
+def _build_drive_service():
+    """OAuth2 자격증명으로 Drive API 서비스 객체 반환.
+
+    1. token.json 존재 → 로드 후 만료 시 자동 갱신
+    2. token.json 없음 → 브라우저 인증 플로우 실행 → token.json 저장
+    """
+    try:
+        from google.oauth2.credentials import Credentials
+        from google.auth.transport.requests import Request
+        from google_auth_oauthlib.flow import InstalledAppFlow
+        from googleapiclient.discovery import build
+    except ImportError:
+        raise ImportError(
+            "Google API 패키지가 필요합니다:\n"
+            "  pip install google-auth google-auth-oauthlib google-api-python-client"
+        )
+
+    creds_path = Path(_get_env("GOOGLE_CREDENTIALS_JSON") or BASE_DIR / "credentials.json")
+    token_path = Path(_get_env("GOOGLE_TOKEN_JSON") or BASE_DIR / "token.json")
+
+    creds = None
+
+    # 저장된 토큰 로드
+    if token_path.exists():
+        creds = Credentials.from_authorized_user_file(str(token_path), _DRIVE_SCOPES)
+
+    # 토큰 없거나 만료됐으면 갱신 또는 재인증
+    if not creds or not creds.valid:
+        if creds and creds.expired and creds.refresh_token:
+            print("[Drive] 토큰 만료 → 자동 갱신 중...", flush=True)
+            creds.refresh(Request())
+        else:
+            if not creds_path.exists():
+                raise FileNotFoundError(
+                    f"credentials.json을 찾을 수 없습니다: {creds_path}\n"
+                    "Google Cloud Console에서 OAuth 클라이언트 ID(데스크톱 앱)를 생성하고\n"
+                    "credentials.json을 서버 폴더에 저장하세요."
+                )
+            print("[Drive] 브라우저 인증 시작...", flush=True)
+            flow = InstalledAppFlow.from_client_secrets_file(
+                str(creds_path), _DRIVE_SCOPES
+            )
+            creds = flow.run_local_server(port=0, open_browser=True)
+            print("[Drive] 인증 완료.", flush=True)
+
+        # 갱신된 토큰 저장
+        token_path.write_text(creds.to_json(), encoding="utf-8")
+        print(f"[Drive] 토큰 저장: {token_path}", flush=True)
+
+    return build("drive", "v3", credentials=creds, cache_discovery=False)
+
+
+def _drive_upload_single(service, file_path: Path, folder_id: str) -> dict:
+    """파일 1개를 Drive에 업로드. 성공 시 {id, name, webViewLink} 반환."""
+    from googleapiclient.http import MediaFileUpload
+
+    mime = mimetypes.guess_type(file_path.name)[0] or "application/octet-stream"
+    metadata = {"name": file_path.name, "parents": [folder_id]}
+    media = MediaFileUpload(str(file_path), mimetype=mime, resumable=True)
+
+    file = (
+        service.files()
+        .create(body=metadata, media_body=media, fields="id,name,webViewLink")
+        .execute()
+    )
+    return file
+
+
+def drive_upload_with_retry(file_paths: list[Path], max_retry: int = 3) -> list[dict]:
+    """파일 목록을 Drive에 업로드. 실패 시 최대 max_retry번 재시도.
+
+    반환: [{name, id, webViewLink, status}, ...]
+    """
+    folder_id = _get_env("GOOGLE_DRIVE_FOLDER_ID")
+    if not folder_id:
+        raise ValueError(
+            "GOOGLE_DRIVE_FOLDER_ID가 .env에 없습니다.\n"
+            "Drive 폴더 ID를 설정하세요."
+        )
+
+    service = _build_drive_service()
+    results = []
+
+    for fp in file_paths:
+        if not fp.exists():
+            print(f"[Drive] 파일 없음 — 건너뜀: {fp}", flush=True)
+            results.append({"name": fp.name, "status": "skipped", "reason": "file not found"})
+            continue
+
+        last_err = None
+        for attempt in range(1, max_retry + 1):
+            try:
+                print(f"[Drive] 업로드 시도 {attempt}/{max_retry}: {fp.name} ({fp.stat().st_size // 1024}KB)", flush=True)
+                info = _drive_upload_single(service, fp, folder_id)
+                print(f"[Drive] 업로드 완료: {info.get('name')}  id={info.get('id')}", flush=True)
+                results.append({**info, "status": "ok"})
+                last_err = None
+                break
+            except Exception as e:
+                last_err = str(e)
+                print(f"[Drive] 시도 {attempt} 실패: {last_err}", flush=True)
+                if attempt < max_retry:
+                    time.sleep(2 ** attempt)   # 지수 백오프: 2s, 4s
+
+        if last_err is not None:
+            print(f"[Drive] 최종 실패: {fp.name}", flush=True)
+            results.append({"name": fp.name, "status": "failed", "reason": last_err})
+
+    return results
+
+
+def handle_upload_drive(body: bytes) -> bytes:
+    """POST /upload-drive  { "files": ["mp4"|"thumbnail_a"|"thumbnail_b"|"all"] }
+    지정 파일을 Drive에 업로드하고 결과 JSON 반환.
+    """
+    payload   = json.loads(body) if body else {}
+    targets   = payload.get("files", ["all"])
+
+    mp4_path   = BASE_DIR / "output_with_bgm.mp4"
+    thumb_a    = BASE_DIR / "thumbnail_test_a.png"
+    thumb_b    = BASE_DIR / "thumbnail_test_b.png"
+
+    _all = {"mp4": mp4_path, "thumbnail_a": thumb_a, "thumbnail_b": thumb_b}
+
+    if "all" in targets:
+        paths = list(_all.values())
+    else:
+        paths = [_all[t] for t in targets if t in _all]
+
+    if not paths:
+        raise ValueError(f"유효한 대상이 없습니다. targets={targets}")
+
+    results = drive_upload_with_retry(paths)
+    ok   = [r for r in results if r.get("status") == "ok"]
+    fail = [r for r in results if r.get("status") == "failed"]
+    print(f"[Drive] 결과: 성공 {len(ok)}개  실패 {len(fail)}개", flush=True)
+
+    return json.dumps({"results": results}, ensure_ascii=False).encode()
+
+
+# ──────────────────────────────────────────────────────────────
 # HTTP Handler
 # ──────────────────────────────────────────────────────────────
 class Handler(BaseHTTPRequestHandler):
@@ -1080,6 +1237,9 @@ class Handler(BaseHTTPRequestHandler):
             elif path == "/generate-thumbnail":
                 thumb_json = handle_generate_thumbnail(body)
                 self._send(200, "application/json", thumb_json)
+            elif path == "/upload-drive":
+                result_json = handle_upload_drive(body)
+                self._send(200, "application/json", result_json)
             else:
                 self._send(404, "text/plain", b"Not Found")
         except Exception:
