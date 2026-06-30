@@ -414,14 +414,15 @@ _EMOTION_PREFIX = {
 def _adjust_wav_speed(wav_path: Path, target_sec: float) -> tuple:
     """atempo로 WAV 속도 조정. 빠르게(최대 2.0x)·느리게(최소 0.5x) 모두 지원.
     목표 대비 ±2% 이내면 조정 생략.
+    반환: (wav_bytes, final_sec, ratio) — ratio는 조정 전 실제/목표 비율(원본 속도 편차).
     """
     actual_sec = _get_audio_duration(wav_path)
-    print(f"[TTS] 실제 길이: {actual_sec:.2f}s  목표: {target_sec:.2f}s", flush=True)
-
     ratio = actual_sec / target_sec
+    print(f"[TTS] 실제 길이: {actual_sec:.2f}s  목표: {target_sec:.2f}s  비율: {ratio:.3f}", flush=True)
+
     if abs(ratio - 1.0) <= 0.02:
         print("[TTS] 속도 조정 불필요 (±2% 이내)", flush=True)
-        return wav_path.read_bytes(), actual_sec
+        return wav_path.read_bytes(), actual_sec, ratio
 
     # atempo 유효 범위: 0.5 ~ 2.0
     speed = round(max(0.5, min(ratio, 2.0)), 4)
@@ -437,35 +438,23 @@ def _adjust_wav_speed(wav_path: Path, target_sec: float) -> tuple:
         print(f"[TTS] 조정 후 길이: {actual_sec:.2f}s", flush=True)
     else:
         print(f"[TTS] atempo 실패, 원본 유지: {res.stderr[:300]}", flush=True)
-    return wav_path.read_bytes(), actual_sec
+    return wav_path.read_bytes(), actual_sec, ratio
 
 
-def handle_generate_tts(body: bytes) -> tuple:
-    payload      = json.loads(body)
-    slides       = payload.get("slides", [])
-    product_name = payload.get("productName", "")
-    voice_name   = payload.get("voiceName", "Kore")
-
-    # 슬라이드 수 기반 타이밍 자동 산정
-    n_slides      = min(len(slides), 10) or 10
-    ms_per_slide, tgt_min, tgt_max = _slide_timing(n_slides)
-    sec_per_slide = ms_per_slide / 1000.0
-    print(f"[TTS] 슬라이드 {n_slides}장 → 슬라이드당 {sec_per_slide}초 / 목표 {tgt_min}~{tgt_max}초", flush=True)
-
-    # 나레이션 텍스트 빌드 (SRT와 동일한 build_narration 재사용)
+def _build_tts_text(slides: list, product_name: str, n_slides: int, sec_per_slide_for_text: float) -> str:
+    """슬라이드별 나레이션을 빌드해 합친다. sec_per_slide_for_text는 글자 수 산정 전용
+    (화면 표시 길이인 _slide_timing 결과와는 별개 — 재생성 시 대본 길이만 조정하기 위함)."""
     lines = []
     for i in range(n_slides):
         slide     = slides[i] if i < len(slides) else {}
-        narration = build_narration(slide, product_name, i, sec_per_slide)
+        narration = build_narration(slide, product_name, i, sec_per_slide_for_text)
         prefix    = _EMOTION_PREFIX.get(i, "")
         lines.append(f"{prefix}{narration}")
-    full_text = "\n\n".join(lines)
+    return "\n\n".join(lines)
 
-    # Gemini TTS 호출
-    api_key = _get_env("GEMINI_API_KEY")
-    if not api_key:
-        raise ValueError("GEMINI_API_KEY가 설정되지 않았습니다. .env 파일을 확인하세요.")
 
+def _call_gemini_tts(full_text: str, voice_name: str, api_key: str) -> bytes:
+    """Gemini TTS를 호출해 WAV bytes(PCM 24000Hz/16bit/mono)를 반환."""
     try:
         from google import genai
         from google.genai import types as gtypes
@@ -506,23 +495,63 @@ def handle_generate_tts(body: bytes) -> tuple:
         traceback.print_exc()
         raise
 
-    # PCM(24000Hz, 16-bit, mono) → WAV
     wav_buf = io.BytesIO()
     with wave.open(wav_buf, "wb") as wf:
         wf.setnchannels(1)
         wf.setsampwidth(2)
         wf.setframerate(24000)
         wf.writeframes(pcm_data)
-    wav_bytes = wav_buf.getvalue()
+    return wav_buf.getvalue()
 
-    # output_narration.wav 서버 저장
+
+_ATEMPO_SAFE_MIN = 0.85   # 이 범위를 벗어나면 부자연스러운 배속으로 간주
+_ATEMPO_SAFE_MAX = 1.15
+
+
+def handle_generate_tts(body: bytes) -> tuple:
+    payload      = json.loads(body)
+    slides       = payload.get("slides", [])
+    product_name = payload.get("productName", "")
+    voice_name   = payload.get("voiceName", "Kore")
+
+    # 슬라이드 수 기반 타이밍 자동 산정 (화면 길이 — 건드리지 않음)
+    n_slides      = min(len(slides), 10) or 10
+    ms_per_slide, tgt_min, tgt_max = _slide_timing(n_slides)
+    sec_per_slide = ms_per_slide / 1000.0
+    target_sec    = round((tgt_min + tgt_max) / 2.0, 3)   # 목표 나레이션 길이 = 화면 목표 구간의 평균
+    print(f"[TTS] 슬라이드 {n_slides}장 → 슬라이드당 {sec_per_slide}초 / 화면 목표 {tgt_min}~{tgt_max}초 / 나레이션 목표 {target_sec}초", flush=True)
+
+    api_key = _get_env("GEMINI_API_KEY")
+    if not api_key:
+        raise ValueError("GEMINI_API_KEY가 설정되지 않았습니다. .env 파일을 확인하세요.")
+
     out_path = BASE_DIR / "output_narration.wav"
+
+    # 1차 생성 (글자 수 산정은 화면 슬롯 기준 sec_per_slide 그대로 사용)
+    text_sec_per_slide = sec_per_slide
+    full_text = _build_tts_text(slides, product_name, n_slides, text_sec_per_slide)
+    wav_bytes = _call_gemini_tts(full_text, voice_name, api_key)
     out_path.write_bytes(wav_bytes)
     print(f"[TTS] 저장 완료: {out_path} ({len(wav_bytes)//1024}KB)", flush=True)
 
-    # 전체 WAV를 27초에 맞게 atempo로 일괄 조정
-    target_sec = 27.0
-    wav_bytes, actual_sec = _adjust_wav_speed(out_path, target_sec)
+    actual_sec = _get_audio_duration(out_path)
+    pre_ratio  = actual_sec / target_sec
+    print(f"[TTS] 1차 생성 길이: {actual_sec:.2f}s / 목표 {target_sec}s (비율 {pre_ratio:.3f})", flush=True)
+
+    # atempo 비율이 0.85~1.15 범위를 벗어나면 자연스럽지 않음 → 글자 수 조정해서 한 번만 재생성
+    if pre_ratio < _ATEMPO_SAFE_MIN or pre_ratio > _ATEMPO_SAFE_MAX:
+        text_sec_per_slide = round(sec_per_slide / pre_ratio, 4)
+        print(f"[TTS] 배속 범위 초과({pre_ratio:.3f}) → 글자 수 기준 재조정: "
+              f"sec_per_slide {sec_per_slide}s → {text_sec_per_slide}s 로 재생성", flush=True)
+
+        full_text = _build_tts_text(slides, product_name, n_slides, text_sec_per_slide)
+        wav_bytes = _call_gemini_tts(full_text, voice_name, api_key)
+        out_path.write_bytes(wav_bytes)
+        actual_sec = _get_audio_duration(out_path)
+        print(f"[TTS] 재생성 길이: {actual_sec:.2f}s / 목표 {target_sec}s (비율 {actual_sec / target_sec:.3f})", flush=True)
+
+    # 최종 미세 조정 (±2% 밖이면 atempo로 보정)
+    wav_bytes, actual_sec, _ = _adjust_wav_speed(out_path, target_sec)
     print(f"[TTS] 최종 길이: {actual_sec:.2f}s (목표 {target_sec}s)", flush=True)
 
     return wav_bytes, actual_sec

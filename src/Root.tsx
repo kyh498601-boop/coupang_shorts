@@ -11,7 +11,7 @@ import {
 export const RemotionRoot: React.FC = () => {
   const defaultImages = Array.from(
     { length: SLIDE_COUNT },
-    (_, i) => `input/slide${String(i + 1).padStart(2, "0")}.png`
+    (_, i) => `input/slide_${String(i + 1).padStart(2, "0")}.png`
   );
 
   return (

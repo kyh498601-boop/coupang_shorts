@@ -34,3 +34,6 @@ token.json
 
 # public/input 제품 이미지 (사용자 개인 파일)
 public/input/
+
+# 실행 로그
+*.log
