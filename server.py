@@ -19,6 +19,7 @@ POST /generate-png  -> JSON {slides, images(base64[]), productName, category}
 import base64
 import io
 import json
+import math
 import os
 import random
 import re
@@ -695,16 +696,46 @@ def _get_audio_duration(path: Path) -> float:
     return float(result.stdout.strip())
 
 
+# 나레이션 목표 라우드니스 (유튜브 숏폼/릴스 기준 권장값)
+_NARRATION_TARGET_LUFS = -16.0
+# BGM 볼륨 슬라이더(5~50%, 기본 15%)는 그대로 두되, 백엔드에서 "나레이션 대비 dB 차"로 재해석한다.
+# 슬라이더 기본값(0.15)일 때 -14dB가 나오도록 기준선을 잡고,
+# 슬라이더를 올리고/내리면 그 기준선 대비 상대적으로(로그 스케일) 커지고/작아진다.
+# (과거 -22dB + ratio=8 더킹 + amix 기본 normalize=true 3중 감쇠로 BGM이 거의 안 들렸던 문제 보정.
+#  -17dB에서도 부족하다는 피드백으로 한 단계 더 올림)
+_BGM_SLIDER_DEFAULT  = 0.15
+_BGM_BASE_OFFSET_DB  = -14.0
+
+
+def _bgm_slider_to_db(bgm_volume: float) -> float:
+    """0.05~0.50 선형 슬라이더 값을 '나레이션 대비 dB'로 환산.
+    슬라이더 기본값(0.15) = -22dB(권장 -20~-25dB 중간값), 그 외 값은 로그 스케일로 비례 이동.
+    """
+    ratio = max(bgm_volume, 0.001) / _BGM_SLIDER_DEFAULT
+    return _BGM_BASE_OFFSET_DB + 20 * math.log10(ratio)
+
+
 def _mix_bgm(bgm_path: Path, bgm_volume: float, out_path: Path) -> None:
     """ffmpeg으로 BGM + 영상(+ 선택적 나레이션) 믹싱.
-    나레이션 있을 때: 나레이션 길이 기준, BGM은 나레이션 끝 후 1초 페이드아웃.
-    나레이션 없을 때: 영상 길이 기준으로 BGM 루프.
+    나레이션 있을 때:
+      - 나레이션은 loudnorm으로 -16 LUFS 정규화 (TTS 엔진/대본 길이에 따라 들쭉날쭉하던 음량을 통일)
+      - BGM은 정규화된 나레이션 대비 일정 dB만큼 작게(기본 -14dB, 슬라이더로 조정 가능)
+      - sidechaincompress(threshold=0.15, ratio=3, 완전히 묻히지 않는 수준)로 나레이션 구간엔 BGM을 추가로 더킹
+      - BGM은 나레이션 끝 후 1초 페이드아웃
+    나레이션 없을 때: 영상 길이 기준으로 BGM 루프 (기존 동작 유지).
     """
     mp4_path = BASE_DIR / "output" / "shopping-shorts.mp4"
     if not mp4_path.exists():
         raise FileNotFoundError(
             f"MP4가 없습니다. render.bat를 먼저 실행하세요.\n경로: {mp4_path}"
         )
+
+    # 2026-07-06: mp4_path는 고정 경로지만 ffmpeg가 호출 시점마다 디스크에서 새로 읽으므로
+    # "캐시" 문제는 아니다 — 실제 원인은 이 경로에 있는 파일 자체가 최신 렌더링인지
+    # 확인하지 않고 그대로 믹싱한다는 것. mtime을 로그로 남겨 어떤 영상을 믹싱했는지
+    # 서버 로그에서 바로 확인할 수 있게 한다 (handle_generate_bgm의 실행 중 가드와 세트).
+    mp4_mtime = os.path.getmtime(mp4_path)
+    print(f"[BGM] 믹싱 대상 영상: {mp4_path} (마지막 렌더링: {time.ctime(mp4_mtime)})", flush=True)
 
     narr_path = BASE_DIR / "output_narration.wav"
     has_narr  = narr_path.exists()
@@ -718,14 +749,33 @@ def _mix_bgm(bgm_path: Path, bgm_volume: float, out_path: Path) -> None:
         total_dur   = round(narr_dur + 1.0, 3)    # 페이드아웃 1초 포함
         print(f"[BGM] 나레이션 길이: {narr_dur:.2f}s → 출력 길이: {total_dur:.2f}s", flush=True)
 
-        # BGM: 나레이션 길이까지 루프 → 끝 1초 페이드아웃
-        # amix: narration 끝날 때까지 혼합 후 BGM 페이드아웃 포함
+        bgm_db = round(_bgm_slider_to_db(bgm_volume), 2)
+        print(f"[BGM] 슬라이더={bgm_volume} → 나레이션({_NARRATION_TARGET_LUFS} LUFS) 대비 {bgm_db}dB "
+              f"+ 더킹(sidechaincompress) 적용", flush=True)
+
+        # BGM: 슬라이더 기반 dB 게인 → 나레이션 길이까지 루프 → 끝 1초 페이드아웃
+        # 나레이션: loudnorm으로 -16 LUFS 정규화 → 더킹용 사이드체인 신호와 실제 믹스용으로 분기
+        # 사이드체인 신호는 BGM의 페이드아웃 꼬리(total_dur)까지 무음 패딩해 더킹 단계에서
+        # sidechaincompress가 BGM을 나레이션 길이에 맞춰 일찍 잘라내지 않도록 한다.
+        # amix는 기본적으로 normalize=true라서 합산 시 두 입력을 클리핑 방지용으로 추가로
+        # 깎아버린다 — 우리가 dB로 맞춰둔 상대 밸런스가 또 한 번 줄어들어 BGM이 묻히는 원인이었음.
+        # normalize=0으로 끄고, 대신 alimiter로 클리핑만 안전하게 막는다.
+        # 주의: alimiter도 기본 level=true(자동 레벨링)라서 입력 음량과 무관하게 출력을
+        # 항상 limit 근처로 끌어올려버려 dB 밸런스를 또 지워버린다 — level=0으로 반드시 꺼야
+        # "피크 안전장치"로만 동작하고, 우리가 맞춘 상대 볼륨이 그대로 유지된다.
+        # threshold=0.05(-26dB)는 loudnorm으로 커진 나레이션(-16 LUFS)이 거의 항상 넘어버려서
+        # BGM을 추가로 ~7.8dB나 더 깎는 원인이었다 — threshold=0.15(-16.5dB), ratio=3으로
+        # 완화해 진짜 큰 소리에만 반응하고 추가 감쇠는 ~2.2dB 수준으로 줄였다.
         fc = (
-            f"[0:a]volume={vol_str},{aformat},"
+            f"[0:a]volume={bgm_db}dB,{aformat},"
             f"atrim=end={total_dur},"
-            f"afade=t=out:st={fade_start}:d=1.0[bgm];"
-            f"[2:a]volume=1.0,{aformat}[narr];"
-            f"[bgm][narr]amix=inputs=2:duration=longest:dropout_transition=2[a]"
+            f"afade=t=out:st={fade_start}:d=1.0[bgm_pre];"
+            f"[2:a]loudnorm=I={_NARRATION_TARGET_LUFS}:TP=-1.5:LRA=11,{aformat}[narr_pre];"
+            f"[narr_pre]asplit=2[narr_mix][narr_sc0];"
+            f"[narr_sc0]apad=whole_dur={total_dur}[narr_sc];"
+            f"[bgm_pre][narr_sc]sidechaincompress=threshold=0.15:ratio=3:attack=20:release=400:makeup=1[bgm_ducked];"
+            f"[bgm_ducked][narr_mix]amix=inputs=2:duration=longest:dropout_transition=2:normalize=0[mixed];"
+            f"[mixed]alimiter=limit=0.97:level=0[a]"
         )
         cmd = [
             "ffmpeg", "-y",
@@ -738,7 +788,7 @@ def _mix_bgm(bgm_path: Path, bgm_volume: float, out_path: Path) -> None:
             "-t", str(total_dur),
             str(out_path),
         ]
-        print("[BGM] 모드: 영상 + BGM + 나레이션 (나레이션 기준 길이)", flush=True)
+        print("[BGM] 모드: 영상 + BGM(더킹) + 나레이션(loudnorm -16 LUFS) (나레이션 기준 길이)", flush=True)
     else:
         # 나레이션 없음: 영상 길이 기준으로 BGM 루프
         fc = f"[0:a]volume={vol_str},{aformat}[a]"
