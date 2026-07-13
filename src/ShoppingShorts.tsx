@@ -13,8 +13,8 @@ import { loadFont } from "@remotion/google-fonts/NotoSansKR";
 const { fontFamily } = loadFont();
 
 export const FPS = 30;
-export const SLIDE_COUNT = 10;
-export const SLIDE_DURATION_FRAMES = 75; // 2.5s × 30fps
+export const SLIDE_COUNT = 7; // 2026-07-06: 10장 → 7장 구조로 재작성 (지침 STEP5 참조)
+export const SLIDE_DURATION_FRAMES = 90; // 3s × 30fps (7장×3초=21초 목표)
 const TRANSITION_FRAMES = 20;
 const BRAND_COLOR = "#2E8B57";
 
@@ -173,10 +173,134 @@ const Watermark: React.FC = () => (
   </AbsoluteFill>
 );
 
+// ── 자막(나레이션) 캡션 ────────────────────────────────────────────────────
+// 배경 박스 없이 흰 글씨 + 검정 외곽선(stroke) 스타일. 가격·할인 등 핵심 키워드는 색상 강조.
+const CAPTION_HIGHLIGHT_COLOR = "#FFD24D"; // 노란색 (브랜드 컬러 #2E8B57로 바꾸려면 이 값만 교체)
+const CAPTION_HIGHLIGHT_PATTERN =
+  /(\d+[%원]|\d+[,.]?\d*\s?(만원|천원)|특가|할인|무료배송|최저가|쿠폰|역대급|1\+1|오늘만|품절임박)/g;
+
+function splitCaptionTokens(text: string): { text: string; highlight: boolean }[] {
+  const tokens: { text: string; highlight: boolean }[] = [];
+  let lastIndex = 0;
+  for (const match of text.matchAll(CAPTION_HIGHLIGHT_PATTERN)) {
+    const idx = match.index ?? 0;
+    if (idx > lastIndex) tokens.push({ text: text.slice(lastIndex, idx), highlight: false });
+    tokens.push({ text: match[0], highlight: true });
+    lastIndex = idx + match[0].length;
+  }
+  if (lastIndex < text.length) tokens.push({ text: text.slice(lastIndex), highlight: false });
+  return tokens;
+}
+
+const Caption: React.FC<{ text: string }> = ({ text }) => {
+  if (!text) return null;
+  const tokens = splitCaptionTokens(text);
+
+  return (
+    <AbsoluteFill
+      style={{
+        top: "auto", bottom: 150, left: 32, right: 32, height: "auto",
+        display: "flex", justifyContent: "center", alignItems: "flex-end",
+      }}
+    >
+      <p
+        style={{
+          margin: 0,
+          width: "100%",
+          maxWidth: "100%",
+          minWidth: 0,
+          boxSizing: "border-box",
+          fontFamily,
+          fontWeight: 800,
+          fontSize: 44,
+          lineHeight: 1.32,
+          textAlign: "center",
+          color: "#fff",
+          WebkitTextStroke: "3.5px #000",
+          paintOrder: "stroke fill",
+          textShadow: "0 2px 6px rgba(0,0,0,0.45)",
+          wordBreak: "keep-all",       // 한글 단어 중간에서 끊기지 않도록
+          overflowWrap: "break-word",  // 그래도 넘치면 강제 줄바꿈 (잘림 방지)
+          whiteSpace: "normal",
+        }}
+      >
+        {tokens.map((tok, i) => (
+          <span key={i} style={tok.highlight ? { color: CAPTION_HIGHLIGHT_COLOR } : undefined}>
+            {tok.text}
+          </span>
+        ))}
+      </p>
+    </AbsoluteFill>
+  );
+};
+
+// ── CTA 링크 안내 오버레이 (9~10번 슬라이드 전용) ──────────────────────────
+// 대시보드 STEP1에서 선택한 플랫폼값에 따라 문구를 분기 — 단일 플랫폼일 때만 구체적으로
+// 표시하고, 복수 선택/"전체"/미지정이면 범용 문구로 폴백한다 (server.py handle_render_video 참고).
+const CTA_LINK_TEXT_MAP: Record<string, string> = {
+  "유튜브":   "🔗 설명란 링크 확인",
+  "youtube":  "🔗 설명란 링크 확인",
+  "페이스북": "🔗 게시물 캡션 링크 확인",
+  "facebook": "🔗 게시물 캡션 링크 확인",
+  "인스타":   "🔗 프로필 링크 확인",
+  "instagram": "🔗 프로필 링크 확인",
+  "틱톡":     "🔗 프로필 링크 확인",
+  "tiktok":   "🔗 프로필 링크 확인",
+};
+const CTA_LINK_TEXT_DEFAULT = "🔗 프로필/설명란 링크 확인";
+
+const CtaLinkOverlay: React.FC<{ platform?: string }> = ({ platform }) => {
+  const frame = useCurrentFrame();
+  const normalizedPlatform = platform?.toLowerCase();
+  const text =
+    (platform && CTA_LINK_TEXT_MAP[platform]) ||
+    (normalizedPlatform && CTA_LINK_TEXT_MAP[normalizedPlatform]) ||
+    CTA_LINK_TEXT_DEFAULT;
+
+  // 0~15프레임: fade-in / 이후: 깜빡임(sine)으로 시선 유도 — 기존 카피(Caption, bottom:150)와
+  // BrandBar(하단 110px)를 침범하지 않도록 하단 텍스트 카드 영역(513px) 상단부에 배치
+  const fadeIn = interpolate(frame, [0, 15], [0, 1], {
+    extrapolateLeft: "clamp", extrapolateRight: "clamp", easing: Easing.ease,
+  });
+  const blink = 0.55 + 0.45 * Math.abs(Math.sin((Math.max(frame - 15, 0) / 15) * Math.PI));
+  const opacity = frame < 15 ? fadeIn : blink;
+
+  return (
+    <AbsoluteFill
+      style={{
+        top: "auto", bottom: 490, left: 32, right: 32, height: "auto",
+        display: "flex", justifyContent: "center", alignItems: "center",
+      }}
+    >
+      <div
+        style={{
+          opacity,
+          backgroundColor: "rgba(46,139,87,0.92)",
+          borderRadius: 999,
+          padding: "12px 28px",
+          boxShadow: "0 4px 14px rgba(0,0,0,0.35)",
+        }}
+      >
+        <span
+          style={{
+            fontFamily, fontSize: 32, fontWeight: 700,
+            color: "#fff", whiteSpace: "nowrap",
+          }}
+        >
+          {text}
+        </span>
+      </div>
+    </AbsoluteFill>
+  );
+};
+
 // ── 메인 컴포지션 ─────────────────────────────────────────────────────────
 export interface ShoppingProps {
   images?: string[];
   durationPerSlideFrames?: number;
+  captions?: string[];  // 슬라이드별 나레이션 자막 (없으면 자막 미표시)
+  durationPerSlideFramesArr?: number[];  // 슬라이드별 실제 음성 길이 비례 분배 (있으면 균등분배 대신 사용)
+  platform?: string;  // CTA 슬라이드(9~10번) 링크 안내 문구 분기용 (예: "유튜브", "페이스북")
 }
 
 const TRANSITION_TYPES: TransitionType[] = ["fade", "zoom", "slide"];
@@ -184,42 +308,56 @@ const TRANSITION_TYPES: TransitionType[] = ["fade", "zoom", "slide"];
 export const ShoppingShorts: React.FC<ShoppingProps> = ({
   images = [],
   durationPerSlideFrames = SLIDE_DURATION_FRAMES,
+  captions = [],
+  durationPerSlideFramesArr,
+  platform,
 }) => {
   const frame = useCurrentFrame();
+
+  // durationPerSlideFramesArr(실제 음성 길이 비례)가 있고 슬라이드 수와 맞으면 그걸 쓰고,
+  // 없으면 기존처럼 균등분배(durationPerSlideFrames)로 폴백 — 기존 동작 100% 유지.
+  const useVariableTiming =
+    !!durationPerSlideFramesArr && durationPerSlideFramesArr.length === images.length;
+  const slideDurations = useVariableTiming
+    ? durationPerSlideFramesArr!
+    : images.map(() => durationPerSlideFrames);
+  const slideStarts = slideDurations.reduce<number[]>((acc, d, i) => {
+    acc.push(i === 0 ? 0 : acc[i - 1] + slideDurations[i - 1]);
+    return acc;
+  }, []);
 
   return (
     <AbsoluteFill style={{ backgroundColor: "#000" }}>
       {images.map((src, i) => {
-        const slideStart = i * durationPerSlideFrames;
-        const slideEnd = slideStart + durationPerSlideFrames;
-        const transitionStart = slideEnd - TRANSITION_FRAMES;
+        const slideDur = slideDurations[i];
+        const slideStart = slideStarts[i];
+        const slideEnd = slideStart + slideDur;
+        // 슬라이드가 짧아도 전환 효과가 슬라이드 시작 이전으로 넘어가지 않도록 클램프
+        const transitionStart = Math.max(slideStart, slideEnd - TRANSITION_FRAMES);
         const transitionType = TRANSITION_TYPES[i % 3];
 
         return (
           <React.Fragment key={src + i}>
             {/* Ken Burns 슬라이드 */}
-            <Sequence from={slideStart} durationInFrames={durationPerSlideFrames}>
-              <KenBurnsSlide src={src} slideIndex={i} slideDuration={durationPerSlideFrames} />
+            <Sequence from={slideStart} durationInFrames={slideDur}>
+              <KenBurnsSlide src={src} slideIndex={i} slideDuration={slideDur} />
             </Sequence>
 
-            {/* 슬라이드 번호 배지 */}
-            <Sequence from={slideStart} durationInFrames={durationPerSlideFrames}>
-              <AbsoluteFill
-                style={{ top: 48, left: 40, right: "auto", bottom: "auto", width: "auto", height: "auto" }}
-              >
-                <div
-                  style={{
-                    backgroundColor: "rgba(0,0,0,0.5)",
-                    borderRadius: 20, padding: "8px 18px",
-                    display: "flex", alignItems: "center",
-                  }}
-                >
-                  <span style={{ fontFamily, fontSize: 24, fontWeight: 600, color: "#fff" }}>
-                    {i + 1} / {images.length}
-                  </span>
-                </div>
-              </AbsoluteFill>
-            </Sequence>
+            {/* 슬라이드 진행 배지("1/7" 등)는 2026-07-06 완전 삭제됨 (PNG 생성 로직과 동일하게 제거) */}
+
+            {/* 자막 (나레이션 텍스트) — 화면 중하단, BrandBar 위 빈 공간 */}
+            {captions[i] && (
+              <Sequence from={slideStart} durationInFrames={slideDur}>
+                <Caption text={captions[i]} />
+              </Sequence>
+            )}
+
+            {/* CTA 링크 안내 오버레이 — 9~10번 슬라이드(마지막 2장)에만 표시 */}
+            {i >= images.length - 2 && (
+              <Sequence from={slideStart} durationInFrames={slideDur}>
+                <CtaLinkOverlay platform={platform} />
+              </Sequence>
+            )}
 
             {/* 전환 효과 */}
             {i < images.length - 1 && (

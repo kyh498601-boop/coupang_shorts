@@ -19,11 +19,13 @@ export const RemotionRoot: React.FC = () => {
       <Composition
         id="ShoppingShorts"
         component={ShoppingShorts}
-        // calculateMetadata: --props 로 durationPerSlideFrames 전달 시 총 길이 자동 계산
+        // calculateMetadata: --props 로 durationPerSlideFrames(또는 슬라이드별 durationPerSlideFramesArr) 전달 시 총 길이 자동 계산
         calculateMetadata={async ({ props }: { props: ShoppingProps }) => ({
           durationInFrames:
-            (props.images?.length ?? SLIDE_COUNT) *
-            (props.durationPerSlideFrames ?? SLIDE_DURATION_FRAMES),
+            props.durationPerSlideFramesArr && props.durationPerSlideFramesArr.length > 0
+              ? props.durationPerSlideFramesArr.reduce((a, b) => a + b, 0)
+              : (props.images?.length ?? SLIDE_COUNT) *
+                (props.durationPerSlideFrames ?? SLIDE_DURATION_FRAMES),
         })}
         durationInFrames={SLIDE_COUNT * SLIDE_DURATION_FRAMES}
         fps={FPS}
