@@ -119,6 +119,14 @@ def _full_bleed_photo_bg(product_img: Image.Image | None,
 
     if product_img:
         src = product_img.convert("RGBA")
+        # 원본에 투명/반투명 영역(알파채널)이 있으면 흰 배경으로 먼저 합성(flatten)해
+        # 완전 불투명하게 만든다. 안 그러면 아래 paste가 crop 자체를 마스크로 써서 투명한
+        # 부분에 이 함수 초기 캔버스색(30,30,30, 짙은 회색)이 그대로 비쳐 "검은 여백"처럼
+        # 보인다 — rembg로 배경 제거됐거나 투명 패딩이 있는 PNG 원본에서 재현됨.
+        if src.getextrema()[3][0] < 255:
+            flat = Image.new("RGB", src.size, (255, 255, 255))
+            flat.paste(src, (0, 0), src)
+            src = flat.convert("RGBA")
         sw, sh = src.size
         scale = max(W / sw, H / sh)
         dw, dh = int(sw * scale), int(sh * scale)
@@ -180,18 +188,21 @@ def _render_slide_hero(slide: dict, product_img: Image.Image | None, product_nam
                          fill=C_WHITE, outline=(0, 0, 0), ow=4)
         hy += line_h
 
-    # 제품명 — 하단부, 골드 외곽선 텍스트 (뱃지 대신 이 텍스트 자체가 포인트 컬러 역할)
-    pname = product_name or "제품명"
-    if len(pname) > 22:
-        pname = pname[:22] + "…"
+    # 워터마크 폭을 먼저 계산 — 제품명이 이 폭을 침범하지 않도록 실측 기준으로 잘라낸다.
+    f_wm = _tw_font(22, bold=True)
+    wm   = "생활꿀템연구소"
+    wm_w = draw.textlength(wm, font=f_wm)
+
+    # 제품명 — 하단부, 골드 외곽선 텍스트 (뱃지 대신 이 텍스트 자체가 포인트 컬러 역할).
+    # 글자수가 아니라 실측 폭 기준으로 잘라야 굵은 폰트에서 워터마크와 안 겹친다.
+    PNAME_WM_GAP = 24
+    pname_max_w  = W - SAFE_MARGIN_X * 2 - wm_w - PNAME_WM_GAP
     f_pname = _tw_font(28, bold=True)
+    pname   = _truncate_to_width(draw, product_name or "제품명", f_pname, pname_max_w)
     _tw_outline_text(draw, pname, SAFE_MARGIN_X, GRID_SAFE_BOTTOM, f_pname,
                      fill=_TC_GOLD, outline=(0, 0, 0), ow=3)
 
     # 워터마크 (우측, 제품명과 같은 y — 흰색 외곽선 텍스트)
-    f_wm = _tw_font(22, bold=True)
-    wm   = "생활꿀템연구소"
-    wm_w = draw.textlength(wm, font=f_wm)
     _tw_outline_text(draw, wm, W - SAFE_MARGIN_X - wm_w, GRID_SAFE_BOTTOM, f_wm,
                      fill=C_WHITE, outline=(0, 0, 0), ow=3)
 
@@ -222,10 +233,14 @@ def render_slide(idx: int, slide: dict, product_img: Image.Image | None, product
                                bottom_grad_h=260, bottom_grad_alpha=130)
     draw = ImageDraw.Draw(bg)
 
-    # idx≥1은 영상 재생 중간 프레임이라 그리드 정지썸네일 크롭과 무관(그리드 크롭은
-    # 첫 프레임=히어로만 해당) — 카드가 없어 확보된 넉넉한 공간에 여유있게 배치한다.
+    # idx≥1은 영상 재생 중간 프레임이라 그리드 정지썸네일 크롭과는 무관하지만(그리드
+    # 크롭은 첫 프레임=히어로만 해당), 대신 Remotion의 자막(Caption, ShoppingShorts.tsx
+    # bottom:150)과 겹치지 않아야 한다. PNG(1080x1350, 4:5)가 영상(1080x1920, 9:16)에
+    # object-fit:cover로 들어갈 때 스케일 1920/1350≈1.4222가 곱해지므로, 자막 블록이
+    # 차지하는 영상 좌표 y≈1654~1770을 PNG 좌표로 역산하면 대략 1135 이하여야 안전하다
+    # — 히어로의 GRID_SAFE_BOTTOM(1100)과 동일한 값을 써서 자막 구간을 피한다.
     TOP_TEXT_Y    = 260
-    BOTTOM_TEXT_Y = H - 130
+    BOTTOM_TEXT_Y = 1100
     text_x        = SAFE_MARGIN_X
     text_w        = W - SAFE_MARGIN_X * 2
 
@@ -254,26 +269,29 @@ def render_slide(idx: int, slide: dict, product_img: Image.Image | None, product
                              fill=(255, 244, 214), outline=(0, 0, 0), ow=2)
             by_ += body_line_h
 
-    # ── 4. 제품명 — 하단부, 골드 외곽선 텍스트 (히어로와 동일 스타일)
-    pname = product_name or "제품명"
-    if len(pname) > 22:
-        pname = pname[:22] + "…"
-    f_pname = _tw_font(26, bold=True)
-    _tw_outline_text(draw, pname, SAFE_MARGIN_X, BOTTOM_TEXT_Y, f_pname,
-                     fill=_TC_GOLD, outline=(0, 0, 0), ow=3)
-
-    # ── 5. 워터마크 — 우측, 제품명과 같은 y, 흰색 외곽선 텍스트 (히어로와 동일 스타일)
+    # ── 4. 워터마크 폭을 먼저 계산 (히어로와 동일 — 제품명이 이 폭을 침범하지 않게 잘라낸다)
     f_wm = _tw_font(22, bold=True)
     wm   = "생활꿀템연구소"
     wm_w = draw.textlength(wm, font=f_wm)
+
+    # ── 5. 제품명 — 하단부, 골드 외곽선 텍스트 (히어로와 동일 스타일).
+    # 글자수가 아니라 실측 폭 기준으로 잘라야 워터마크와 안 겹친다.
+    PNAME_WM_GAP = 24
+    pname_max_w  = W - SAFE_MARGIN_X * 2 - wm_w - PNAME_WM_GAP
+    f_pname = _tw_font(26, bold=True)
+    pname   = _truncate_to_width(draw, product_name or "제품명", f_pname, pname_max_w)
+    _tw_outline_text(draw, pname, SAFE_MARGIN_X, BOTTOM_TEXT_Y, f_pname,
+                     fill=_TC_GOLD, outline=(0, 0, 0), ow=3)
+
+    # ── 6. 워터마크 — 우측, 제품명과 같은 y, 흰색 외곽선 텍스트 (히어로와 동일 스타일)
     _tw_outline_text(draw, wm, W - SAFE_MARGIN_X - wm_w, BOTTOM_TEXT_Y, f_wm,
                      fill=C_WHITE, outline=(0, 0, 0), ow=3)
 
-    # ── 6. 하단 진행바 (4px) ───────────────────────────────────
+    # ── 7. 하단 진행바 (4px) ───────────────────────────────────
     draw.rectangle([0, H - 4, W, H], fill=(224, 224, 224))
     draw.rectangle([0, H - 4, int(W * (idx + 1) / SLIDE_TOTAL), H], fill=C_BRAND)
 
-    # ── 7. PNG bytes ────────────────────────────────────────────
+    # ── 8. PNG bytes ────────────────────────────────────────────
     img = bg.convert("RGB")
     print(f"[slide {idx+1}] PNG size: {img.size}")
     buf = io.BytesIO()
@@ -1117,6 +1135,17 @@ def _shorten_hook(text: str, max_words: int = 5) -> str:
     if len(words) <= max_words:
         return text
     return " ".join(words[:max_words]).rstrip("!?.,:;") + "…"
+
+
+def _truncate_to_width(draw, text: str, font, max_w: int) -> str:
+    """글자수가 아니라 실측 픽셀 폭 기준으로 말줄임. 제품명처럼 옆에 워터마크 등
+    다른 요소와 같은 줄을 공유하는 텍스트가 굵은 폰트에서 예상보다 넓게 그려져
+    옆 요소를 침범하는 것을 방지한다."""
+    if draw.textlength(text, font=font) <= max_w:
+        return text
+    while text and draw.textlength(text + "…", font=font) > max_w:
+        text = text[:-1]
+    return (text + "…") if text else "…"
 
 
 def _tw_font(size: int, bold: bool = True) -> ImageFont.FreeTypeFont:
