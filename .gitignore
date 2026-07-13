@@ -26,7 +26,12 @@ bgm/**/*.ogg
 bgm/**/*.flac
 
 # Claude 세션 파일
-.claude/
+.claude/*
+!.claude/skills/
+.claude/skills/*
+# 프로젝트 지식 스킬(직접 작성)만 예외로 추적 — sheets-cli 등 외부 벤더 스킬(자체 .git 내장)은 제외
+!.claude/skills/category-copy-rules/
+!.claude/skills/png-video-render-rules/
 
 # Google OAuth 인증 파일 (민감 정보)
 credentials.json

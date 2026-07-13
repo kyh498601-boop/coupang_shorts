@@ -188,30 +188,17 @@ def _render_slide_hero(slide: dict, product_img: Image.Image | None, product_nam
                          fill=C_WHITE, outline=(0, 0, 0), ow=4)
         hy += line_h
 
-    # 워터마크 폭을 먼저 계산 — 제품명이 이 폭을 침범하지 않도록 실측 기준으로 잘라낸다.
-    # 제품명과 비슷한 비중으로 보이도록 폰트를 22 → 26으로 키움.
-    f_wm = _tw_font(26, bold=True)
-    wm   = "생활꿀템연구소"
-    wm_w = draw.textlength(wm, font=f_wm)
-
-    # 제품명 — 하단부, 골드 외곽선 텍스트 (뱃지 대신 이 텍스트 자체가 포인트 컬러 역할).
-    # 글자수가 아니라 실측 폭 기준으로 잘라야 굵은 폰트에서 워터마크와 안 겹친다.
-    PNAME_WM_GAP = 24
-    pname_max_w  = W - SAFE_MARGIN_X * 2 - wm_w - PNAME_WM_GAP
+    # 제품명 — 하단부, 골드 외곽선 텍스트, 가운데 정렬 (뱃지 대신 이 텍스트 자체가
+    # 포인트 컬러 역할). PNG에 직접 굽던 워터마크 텍스트는 제거함 — Remotion의
+    # <Watermark /> 컴포넌트가 영상 오버레이로 이미 항상 표시하고 있어 중복이었다
+    # (ShoppingShorts.tsx 참고, 그쪽 컴포넌트는 그대로 유지).
+    pname_max_w = W - SAFE_MARGIN_X * 2
     f_pname = _tw_font(28, bold=True)
     pname   = _truncate_to_width(draw, product_name or "제품명", f_pname, pname_max_w)
-    _tw_outline_text(draw, pname, SAFE_MARGIN_X, GRID_SAFE_BOTTOM, f_pname,
+    pname_w = draw.textlength(pname, font=f_pname)
+    pname_x = SAFE_MARGIN_X + (pname_max_w - pname_w) / 2
+    _tw_outline_text(draw, pname, pname_x, GRID_SAFE_BOTTOM, f_pname,
                      fill=_TC_GOLD, outline=(0, 0, 0), ow=3)
-
-    # 워터마크 (우측, 흰색 외곽선 텍스트) — 제품명과 폰트 크기가 달라 같은 y에 그리면
-    # 위쪽 기준으로만 맞아 무게중심이 어긋나 보이므로, 제품명의 실측 세로 중심에
-    # 워터마크 자신의 세로 중심을 맞춘다.
-    pname_bbox   = draw.textbbox((0, 0), pname, font=f_pname)
-    wm_bbox      = draw.textbbox((0, 0), wm, font=f_wm)
-    pname_center = GRID_SAFE_BOTTOM + (pname_bbox[1] + pname_bbox[3]) / 2
-    wm_y         = int(pname_center - (wm_bbox[1] + wm_bbox[3]) / 2)
-    _tw_outline_text(draw, wm, W - SAFE_MARGIN_X - wm_w, wm_y, f_wm,
-                     fill=C_WHITE, outline=(0, 0, 0), ow=3)
 
     # 하단 진행바 (4px — 카드가 아니라 진행 상태 표시용 얇은 바)
     draw.rectangle([0, H - 4, W, H], fill=(224, 224, 224))
@@ -276,29 +263,23 @@ def render_slide(idx: int, slide: dict, product_img: Image.Image | None, product
                              fill=(255, 244, 214), outline=(0, 0, 0), ow=2)
             by_ += body_line_h
 
-    # ── 4. 워터마크 폭을 먼저 계산 (히어로와 동일 — 제품명이 이 폭을 침범하지 않게 잘라낸다)
-    f_wm = _tw_font(22, bold=True)
-    wm   = "생활꿀템연구소"
-    wm_w = draw.textlength(wm, font=f_wm)
-
-    # ── 5. 제품명 — 하단부, 골드 외곽선 텍스트 (히어로와 동일 스타일).
-    # 글자수가 아니라 실측 폭 기준으로 잘라야 워터마크와 안 겹친다.
-    PNAME_WM_GAP = 24
-    pname_max_w  = W - SAFE_MARGIN_X * 2 - wm_w - PNAME_WM_GAP
+    # ── 4. 제품명 — 하단부, 골드 외곽선 텍스트, 가운데 정렬 (히어로와 동일 스타일).
+    # PNG에 직접 굽던 워터마크 텍스트는 제거함 — Remotion의 <Watermark /> 컴포넌트가
+    # 영상 오버레이로 이미 항상 표시하고 있어 중복이었다 (ShoppingShorts.tsx 참고,
+    # 그쪽 컴포넌트는 그대로 유지).
+    pname_max_w = W - SAFE_MARGIN_X * 2
     f_pname = _tw_font(26, bold=True)
     pname   = _truncate_to_width(draw, product_name or "제품명", f_pname, pname_max_w)
-    _tw_outline_text(draw, pname, SAFE_MARGIN_X, BOTTOM_TEXT_Y, f_pname,
+    pname_w = draw.textlength(pname, font=f_pname)
+    pname_x = SAFE_MARGIN_X + (pname_max_w - pname_w) / 2
+    _tw_outline_text(draw, pname, pname_x, BOTTOM_TEXT_Y, f_pname,
                      fill=_TC_GOLD, outline=(0, 0, 0), ow=3)
 
-    # ── 6. 워터마크 — 우측, 제품명과 같은 y, 흰색 외곽선 텍스트 (히어로와 동일 스타일)
-    _tw_outline_text(draw, wm, W - SAFE_MARGIN_X - wm_w, BOTTOM_TEXT_Y, f_wm,
-                     fill=C_WHITE, outline=(0, 0, 0), ow=3)
-
-    # ── 7. 하단 진행바 (4px) ───────────────────────────────────
+    # ── 5. 하단 진행바 (4px) ───────────────────────────────────
     draw.rectangle([0, H - 4, W, H], fill=(224, 224, 224))
     draw.rectangle([0, H - 4, int(W * (idx + 1) / SLIDE_TOTAL), H], fill=C_BRAND)
 
-    # ── 8. PNG bytes ────────────────────────────────────────────
+    # ── 6. PNG bytes ────────────────────────────────────────────
     img = bg.convert("RGB")
     print(f"[slide {idx+1}] PNG size: {img.size}")
     buf = io.BytesIO()
@@ -526,6 +507,56 @@ def _narration_from_slide(slide: dict) -> str:
     return text
 
 
+# 표시광고법상 객관적 근거 없이 쓰면 공정위 규제 대상이 될 수 있는 절대적/최상급 표현.
+# `02_Knowledge_상세규칙.md.md`의 체크리스트에는 "절대금지확인" 항목명만 있고 구체적
+# 목록이 문서화돼 있지 않아(2026-07-XX 진단), 여기 코드에 명문화한다. 카테고리별 카피
+# 생성 단계(category-copy-rules 스킬)에서도 동일 목록을 참고해 애초에 안 쓰도록 하지만,
+# 이 필터는 나레이션/자막(TTS·captions.json) 최종 텍스트에 한해 사후 안전망으로 작동한다
+# — headline/body(화면 PNG 텍스트)는 이 필터를 거치지 않으므로 카피 생성 단계가 1차 방어선.
+_PROHIBITED_WORD_MAP = {
+    "최저가": "특가",
+    "역대급": "인기 많은",
+    "최다판매": "인기 많은",
+    "1위": "인기",
+    "최고": "아주 좋은",   # 아래 패턴에 안 걸리는 나머지 경우를 위한 최후 안전망
+    "베스트": "인기",
+}
+
+# "최고"는 명사라 뒤에 붙는 서술격 조사(코퓰러)·어미에 따라 그 어미까지 그대로 붙어버려
+# 단순 단어 치환("최고"→"아주 좋은")만 하면 "아주 좋은예요"처럼 어색해진다. 실제 나레이션에
+# 자주 나오는 어미 패턴을 통째로 자연스러운 구어체 문구로 먼저 바꾸고, 여기 안 걸리는
+# 나머지 "최고"만 위 _PROHIBITED_WORD_MAP의 단순 치환으로 마지막 안전망을 건다.
+_CHOEGO_PATTERNS = [
+    (re.compile(r"최고예요"), "정말 좋아요"),
+    (re.compile(r"최고에요"), "정말 좋아요"),   # 흔한 비표준 표기 변형도 함께 처리
+    (re.compile(r"최고입니다"), "정말 좋습니다"),
+    (re.compile(r"최고죠"), "정말 좋죠"),
+    (re.compile(r"최고의"), "뛰어난"),          # 관형형 (예: "최고의 성능" → "뛰어난 성능")
+    (re.compile(r"최고인"), "정말 좋은"),
+]
+
+
+def _filter_prohibited_words(text: str) -> str:
+    """나레이션/자막 최종 텍스트에서 금지 표현을 발견하면 안전한 표현으로 치환한다.
+    build_narration()이 문장을 완성한 직후 마지막 단계에서 호출해, TTS 본문과
+    captions.json이 항상 같은 소스(build_narration)를 쓰는 이 코드베이스 구조상
+    양쪽 다 자동으로 필터를 통과하게 한다."""
+    filtered = text
+
+    if "최고" in filtered:
+        before = filtered
+        for pattern, repl in _CHOEGO_PATTERNS:
+            filtered = pattern.sub(repl, filtered)
+        if filtered != before:
+            print(f"[금지표현] '최고+어미' 패턴 치환 (원문: {text!r} → {filtered!r})", flush=True)
+
+    for banned, safe in _PROHIBITED_WORD_MAP.items():
+        if banned in filtered:
+            print(f"[금지표현] {banned!r} → {safe!r} 자동 치환 (원문: {text!r})", flush=True)
+            filtered = filtered.replace(banned, safe)
+    return filtered
+
+
 def build_narration(slide: dict, product_name: str, idx: int,
                     sec_per_slide: float = 2.5, category: str = "") -> str:
     """슬라이드 나레이션 텍스트를 만든다.
@@ -572,6 +603,7 @@ def build_narration(slide: dict, product_name: str, idx: int,
         if len(candidate) <= max_chars:
             narration = candidate
 
+    narration = _filter_prohibited_words(narration)
     return narration
 
 
