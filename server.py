@@ -40,6 +40,8 @@ from PIL import Image, ImageDraw, ImageEnhance, ImageFilter, ImageFont
 
 import community_post_helper
 from community_post_template import generate_post
+import instagram_api
+import facebook_api
 import coupang_collector
 
 # ──────────────────────────────────────────────────────────────
@@ -1597,10 +1599,14 @@ def _drive_upload_single(service, file_path: Path, folder_id: str) -> dict:
     return file
 
 
-def drive_upload_with_retry(file_paths: list[Path], max_retry: int = 3) -> list[dict]:
+def drive_upload_with_retry(file_paths: list[Path], max_retry: int = 3, make_public: bool = False) -> list[dict]:
     """파일 목록을 Drive에 업로드. 실패 시 최대 max_retry번 재시도.
 
-    반환: [{name, id, webViewLink, status}, ...]
+    make_public=True면 업로드 성공한 파일마다 "링크가 있는 모든 사용자(뷰어)" 권한을 부여하고
+    결과에 publicUrl(직접 다운로드 링크)을 추가한다. Instagram Graph API처럼 외부 서버가
+    직접 접근 가능한 URL이 필요한 경우에 사용.
+
+    반환: [{name, id, webViewLink, status, publicUrl?}, ...]
     """
     folder_id = _get_env("GOOGLE_DRIVE_FOLDER_ID")
     if not folder_id:
@@ -1624,6 +1630,15 @@ def drive_upload_with_retry(file_paths: list[Path], max_retry: int = 3) -> list[
                 print(f"[Drive] 업로드 시도 {attempt}/{max_retry}: {fp.name} ({fp.stat().st_size // 1024}KB)", flush=True)
                 info = _drive_upload_single(service, fp, folder_id)
                 print(f"[Drive] 업로드 완료: {info.get('name')}  id={info.get('id')}", flush=True)
+
+                if make_public:
+                    service.permissions().create(
+                        fileId=info["id"],
+                        body={"role": "reader", "type": "anyone"},
+                    ).execute()
+                    info["publicUrl"] = f"https://drive.google.com/uc?export=download&id={info['id']}"
+                    print(f"[Drive] 공개 권한 설정 완료 → {info['publicUrl']}", flush=True)
+
                 results.append({**info, "status": "ok"})
                 last_err = None
                 break
@@ -2239,6 +2254,118 @@ def handle_upload_youtube(body: bytes) -> bytes:
 
 
 # ──────────────────────────────────────────────────────────────
+# Instagram 릴스 업로드  (Graph API — Drive 공개 URL 경유)
+# ──────────────────────────────────────────────────────────────
+IG_CAPTION_MAX = 2200
+# 쿠팡 파트너스 활동 표기 의무 해시태그. 대시보드 STEP 6 "설명" 필드에 사용자가 빠뜨려도
+# 업로드 시 자동으로 보강한다 (공정위 유료광고 표시 가이드 대응).
+REQUIRED_IG_HASHTAGS = ["#광고", "#유료광고", "#쿠팡파트너스"]
+
+
+def _ensure_required_hashtags(caption: str) -> str:
+    """필수 해시태그 중 캡션에 없는 것만 뒤에 덧붙인다. 2200자 제한을 넘으면
+    해시태그는 보존하고 본문 쪽을 잘라낸다."""
+    missing = [tag for tag in REQUIRED_IG_HASHTAGS if tag not in caption]
+    if not missing:
+        return caption[:IG_CAPTION_MAX]
+
+    suffix = " ".join(missing)
+    body_text = caption.strip()
+    combined = f"{body_text}\n\n{suffix}" if body_text else suffix
+
+    if len(combined) > IG_CAPTION_MAX:
+        overflow = len(combined) - IG_CAPTION_MAX
+        body_text = body_text[:-overflow] if overflow < len(body_text) else ""
+        combined = f"{body_text}\n\n{suffix}" if body_text else suffix
+
+    return combined
+
+
+def handle_upload_instagram(body: bytes) -> bytes:
+    """POST /upload-instagram — output_with_bgm.mp4를 Drive에 업로드해 공개 다운로드 URL을
+    만든 뒤, instagram_api.upload_reel()로 릴스를 게시한다.
+
+    Body JSON:
+      caption  str  릴스 캡션 (대시보드 STEP 6 "설명" 필드 값을 기반으로,
+                     필수 해시태그(#광고 #유료광고 #쿠팡파트너스)가 없으면 자동 보강)
+    """
+    payload = json.loads(body) if body else {}
+    caption = _ensure_required_hashtags((payload.get("caption") or "").strip())
+
+    mp4_path = BASE_DIR / "output_with_bgm.mp4"
+    if not mp4_path.exists():
+        raise FileNotFoundError(
+            "output_with_bgm.mp4가 없습니다. STEP 4에서 BGM을 먼저 추가하세요."
+        )
+
+    print(f"[Instagram] Drive 업로드 시작 (공개 URL 생성용): {mp4_path.name}", flush=True)
+    drive_results = drive_upload_with_retry([mp4_path], make_public=True)
+    info = drive_results[0]
+    if info.get("status") != "ok":
+        raise RuntimeError(f"Instagram 업로드용 Drive 업로드 실패: {info.get('reason')}")
+
+    video_url = info["publicUrl"]
+    print(f"[Instagram] 릴스 게시 시작 (video_url={video_url})", flush=True)
+
+    try:
+        result = instagram_api.upload_reel(video_url, caption)
+    except Exception as e:
+        print(f"[Instagram] 릴스 게시 실패: {e}", flush=True)
+        raise
+
+    print(f"[Instagram] 릴스 게시 완료: media_id={result['id']}", flush=True)
+
+    return json.dumps(
+        {"ok": True, "mediaId": result["id"], "creationId": result["creation_id"]},
+        ensure_ascii=False
+    ).encode()
+
+
+# ──────────────────────────────────────────────────────────────
+# Facebook 페이지 게시  (Graph API — Instagram과 페이지/토큰 재사용)
+# ──────────────────────────────────────────────────────────────
+def handle_upload_facebook(body: bytes) -> bytes:
+    """POST /upload-facebook — output_with_bgm.mp4를 Drive에 업로드해 공개 다운로드 URL을
+    만든 뒤, facebook_api.upload_video_post()로 "생활꿀템연구소" 페이지에 게시한다.
+    facebook_auth.py로 별도 발급받은 FACEBOOK_PAGE_ACCESS_TOKEN을 사용한다
+    (Instagram 업로드용 META_PAGE_ACCESS_TOKEN과는 다른 토큰 — 이유는 facebook_auth.py 참고).
+
+    Body JSON:
+      caption  str  게시물 캡션 (대시보드가 쿠팡 파트너스 링크를 클릭 가능한 형태로 직접 포함해 전달)
+    """
+    payload = json.loads(body) if body else {}
+    caption = (payload.get("caption") or "").strip()
+
+    mp4_path = BASE_DIR / "output_with_bgm.mp4"
+    if not mp4_path.exists():
+        raise FileNotFoundError(
+            "output_with_bgm.mp4가 없습니다. STEP 4에서 BGM을 먼저 추가하세요."
+        )
+
+    print(f"[Facebook] Drive 업로드 시작 (공개 URL 생성용): {mp4_path.name}", flush=True)
+    drive_results = drive_upload_with_retry([mp4_path], make_public=True)
+    info = drive_results[0]
+    if info.get("status") != "ok":
+        raise RuntimeError(f"Facebook 업로드용 Drive 업로드 실패: {info.get('reason')}")
+
+    video_url = info["publicUrl"]
+    print(f"[Facebook] 페이지 게시 시작 (video_url={video_url})", flush=True)
+
+    try:
+        result = facebook_api.upload_video_post(video_url, caption)
+    except Exception as e:
+        print(f"[Facebook] 게시 실패: {e}", flush=True)
+        raise
+
+    print(f"[Facebook] 게시 완료: video_id={result['id']}", flush=True)
+
+    return json.dumps(
+        {"ok": True, "videoId": result["id"], "url": result["url"]},
+        ensure_ascii=False
+    ).encode()
+
+
+# ──────────────────────────────────────────────────────────────
 # HTTP Handler
 # ──────────────────────────────────────────────────────────────
 class Handler(BaseHTTPRequestHandler):
@@ -2326,6 +2453,12 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(200, "application/json", result_json)
             elif path == "/upload-youtube":
                 result_json = handle_upload_youtube(body)
+                self._send(200, "application/json", result_json)
+            elif path == "/upload-instagram":
+                result_json = handle_upload_instagram(body)
+                self._send(200, "application/json", result_json)
+            elif path == "/upload-facebook":
+                result_json = handle_upload_facebook(body)
                 self._send(200, "application/json", result_json)
             elif path == "/generate-community-post":
                 result_json = handle_generate_community_post(body)
