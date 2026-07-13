@@ -26,6 +26,7 @@ import random
 import re
 import shutil
 import subprocess
+import time
 import traceback
 import urllib.error
 import urllib.request
@@ -51,7 +52,7 @@ BGM_DIR  = BASE_DIR / "bgm"
 # ── 렌더링 전역 상태 ────────────────────────────────────────────
 import threading as _threading
 _render_lock  = _threading.Lock()
-_render_state: dict = {"running": False, "done": False, "exitCode": None, "log": []}
+_render_state: dict = {"running": False, "done": False, "exitCode": None, "log": [], "finishedAt": None}
 _ANSI_RE = __import__("re").compile(r"\x1b\[[0-9;]*[mK]")
 
 SLIDE_TOTAL = 7         # 2026-07-06: 10장 → 7장 구조로 재작성 (지침 STEP5 참조)
@@ -1644,13 +1645,15 @@ def drive_upload_with_retry(file_paths: list[Path], max_retry: int = 3) -> list[
 # /render-status (폴링용 상태 조회)
 # ──────────────────────────────────────────────────────────────
 
-def _run_render_worker() -> None:
+def _run_render_worker(platform: str = "") -> None:
     global _render_state
     ps1 = BASE_DIR / "render.ps1"
     cmd = [
         "powershell", "-ExecutionPolicy", "Bypass",
         "-File", str(ps1),
     ]
+    if platform:
+        cmd += ["-Platform", platform]
     print("[Render] 렌더링 시작...", flush=True)
     try:
         proc = subprocess.Popen(
@@ -1678,18 +1681,30 @@ def _run_render_worker() -> None:
         _render_state["running"] = False
         _render_state["done"]    = True
         _render_state["exitCode"] = rc
+        _render_state["finishedAt"] = time.time() if rc == 0 else None
     print(f"[Render] 완료 (exitCode={rc})", flush=True)
 
 
 def handle_render_video(body: bytes) -> bytes:
-    """POST /render-video — render.ps1 백그라운드 실행."""
+    """POST /render-video — render.ps1 백그라운드 실행.
+
+    Body JSON (선택):
+      platforms  list[str]  STEP 1에서 선택한 콘텐츠 타겟 플랫폼 (예: ["유튜브"], ["전체"]).
+                 Remotion이 9~10번 슬라이드(CTA 구간)에 표시할 링크 안내 문구를 이 값으로 분기한다.
+                 단일 플랫폼일 때만 구체적으로 분기하고, 복수 선택되었거나 "전체"인 경우
+                 render.ps1/ShoppingShorts.tsx가 범용 문구로 폴백한다.
+    """
     global _render_state
     with _render_lock:
         if _render_state.get("running"):
             raise RuntimeError("이미 렌더링이 진행 중입니다. /render-status 로 확인하세요.")
-        _render_state = {"running": True, "done": False, "exitCode": None, "log": []}
+        _render_state = {"running": True, "done": False, "exitCode": None, "log": [], "finishedAt": None}
 
-    t = _threading.Thread(target=_run_render_worker, daemon=True)
+    payload   = json.loads(body) if body else {}
+    platforms = payload.get("platforms") or []
+    platform  = platforms[0] if len(platforms) == 1 and platforms[0] != "전체" else ""
+
+    t = _threading.Thread(target=_run_render_worker, args=(platform,), daemon=True)
     t.start()
     return json.dumps({"ok": True, "message": "렌더링 시작됨"}).encode()
 
