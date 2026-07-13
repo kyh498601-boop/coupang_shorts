@@ -423,7 +423,7 @@ def _clean(text: str) -> str:
     """이모지·특수기호 제거, 링크 단축, 말하기 부적합 문자 정리."""
     import re
     text = re.sub(r"http\S+", "", text)                   # URL 제거
-    text = re.sub(r"linktr\.ee/\S+", "", text)            # 링크트리 제거
+    text = re.sub(r"(linktr\.ee|link\.inpock\.co\.kr)/\S+", "", text)  # 링크트리/인포크링크 제거
     text = re.sub(r"[→#@·•※①②③④⑤]", " ", text)          # 기호 → 공백
     # 이모지 제거 (유니코드 카테고리 So/Cs)
     text = "".join(
@@ -437,13 +437,19 @@ def _clean(text: str) -> str:
 
 # ── 슬라이드 수 → 타이밍 자동 산정 ────────────────────────────────────────
 # 반환: (ms_per_slide, total_min_sec, total_max_sec)
+# 2026-07-06: 표준 슬라이드 수가 10장 → 7장으로 바뀌면서, 7장 기준 목표를
+# "슬라이드당 3초 × 7장 = 21초"로 고정(min==max)한다. 4~6장 구간은 그대로 유지.
 def _slide_timing(n: int) -> tuple[int, float, float]:
     if n <= 3:   return 5000, 15.0, 15.0   # 1~3장: 슬라이드당 5초, 총 15초
     elif n <= 6: return 4000, 20.0, 25.0   # 4~6장: 슬라이드당 4초, 총 20~25초
-    else:        return 3000, 25.0, 30.0   # 7~10장: 슬라이드당 3초, 총 25~30초
+    else:        return 3000, n * 3.0, n * 3.0   # 7장(표준): 슬라이드당 3초, 총 n×3초 (7장=21초)
 
 
 _CHARS_PER_SEC = 11.0   # 한국어 TTS 기준 초당 문자 수 (자연 발화 기준)
+
+# 식품/식품_신선 카테고리 판별 — 이 카테고리일 때만 "사용"류(써보다/사용하다/경험하다) 어휘
+# 대신 "먹다/드시다"류 어휘를 쓴다. 나머지 카테고리는 기존 어휘 세트를 그대로 사용한다.
+_FOOD_CATEGORIES = {"식품", "식품_신선"}
 
 # 긴 슬롯(4초 이상)에서 짧은 나레이션을 보완하는 보충 문장
 _SUPPLEMENTS = [
@@ -1111,7 +1117,21 @@ def _mix_bgm(bgm_path: Path, bgm_volume: float, out_path: Path) -> None:
 
 
 def handle_generate_bgm(body: bytes) -> tuple:
-    """랜덤 BGM 선택 → 믹싱 → (mp4_bytes, bgm_name) 반환."""
+    """랜덤 BGM 선택 → 믹싱 → (mp4_bytes, bgm_name, source_mtime_iso) 반환.
+
+    2026-07-06 버그 수정: BGM 믹싱은 output/shopping-shorts.mp4를 고정 경로로 쓰지만
+    매 호출마다 ffmpeg가 디스크에서 새로 읽어가므로 "캐시"가 원인은 아니었다. 실제 원인은
+    (1) 새 렌더링이 아직 진행 중인데 그 사이에 BGM 버튼을 눌러 이전 mp4가 믹싱되거나,
+    (2) 이번 세션에서 렌더링을 아예 실행하지 않아 예전 mp4가 그대로 남아있는 경우였다.
+    (1)은 여기서 명시적으로 차단하고, (2)는 소스 영상의 mtime을 응답에 실어 대시보드가
+    "이 영상은 언제 렌더링됐는지" 사용자에게 보여줄 수 있게 한다."""
+    with _render_lock:
+        if _render_state.get("running"):
+            raise RuntimeError(
+                "렌더링이 아직 진행 중입니다. 렌더링이 끝난 뒤(STEP4 '✅ 렌더링 완료!') "
+                "BGM을 추가해주세요 — 지금 추가하면 이전 영상에 BGM이 섞입니다."
+            )
+
     payload    = json.loads(body)
     bgm_volume = float(payload.get("bgmVolume", 0.15))
     exclude    = payload.get("excludeBgm") or None
@@ -1120,7 +1140,10 @@ def handle_generate_bgm(body: bytes) -> tuple:
     out_path = BASE_DIR / "output_with_bgm.mp4"
     print(f"[BGM] 선택: {bgm_path.name}", flush=True)
     _mix_bgm(bgm_path, bgm_volume, out_path)
-    return out_path.read_bytes(), bgm_path.name
+
+    source_mp4 = BASE_DIR / "output" / "shopping-shorts.mp4"
+    source_mtime_iso = datetime.datetime.fromtimestamp(os.path.getmtime(source_mp4)).isoformat()
+    return out_path.read_bytes(), bgm_path.name, source_mtime_iso
 
 
 def handle_list_bgm() -> bytes:
@@ -1184,7 +1207,7 @@ def _tw_font(size: int, bold: bool = True) -> ImageFont.FreeTypeFont:
 
 def _tw_remove_bg(img: Image.Image) -> Image.Image:
     """rembg로 배경 제거 → 투명 RGBA 반환.
-    알파 임계값(128) 처리로 반투명 잔상 완전 제거.
+    알파 임계값(200) 처리로 반투명 잔상 완전 제거.
     rembg 미설치 또는 오류 시 원본 그대로 반환 (폴백).
     """
     try:
@@ -1195,8 +1218,11 @@ def _tw_remove_bg(img: Image.Image) -> Image.Image:
         result = _rembg_remove(buf_in.getvalue())
         out = Image.open(io.BytesIO(result)).convert("RGBA")
         r, g, b, a = out.split()
-        # 1단계: 확실한 배경(α<30) 완전 제거 → 색번짐 잔상 차단
-        a = a.point(lambda v: 0 if v < 30 else v)
+        # 1단계: 확실한 배경뿐 아니라 rembg가 애매하게(중간 알파) 인식한 잔상까지
+        # 완전 제거 (예: 분리된 벗겨진 껍질처럼 낮은 신뢰도로 반투명 인식된 영역).
+        # 실측: 잔상 알파 33~153(평균 107) vs 실제 제품 코어 250+ → 200이면 잔상은
+        # 전부 제거되면서 제품 경계 안쪽은 영향받지 않음.
+        a = a.point(lambda v: 0 if v < 200 else v)
         # 2단계: 알파 채널만 미세 블러 → 계단 현상 없는 매끄러운 엣지
         a = a.filter(ImageFilter.GaussianBlur(radius=0.8))
         # 3단계: 블러로 낮아진 최대값 복원 (엣지 안쪽은 완전 불투명 유지)
@@ -2452,6 +2478,12 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/render-status":
             self._send(200, "application/json", handle_render_status())
             return
+        if path == "/copy-status":
+            from urllib.parse import parse_qs
+            qs = parse_qs(parsed.query)
+            request_id = qs.get("requestId", [""])[0]
+            self._send(200, "application/json", handle_copy_status(request_id))
+            return
 
         rel = path.lstrip("/")
         fp  = BASE_DIR / "dashboard.html" if rel in ("", "dashboard.html") else BASE_DIR / rel
@@ -2481,11 +2513,12 @@ class Handler(BaseHTTPRequestHandler):
                     "Access-Control-Expose-Headers": "X-Narration-Duration",
                 })
             elif path in ("/generate-bgm", "/change-bgm"):
-                mp4_bytes, bgm_name = handle_generate_bgm(body)
+                mp4_bytes, bgm_name, source_mtime_iso = handle_generate_bgm(body)
                 self._send(200, "video/mp4", mp4_bytes, {
                     "Content-Disposition": 'attachment; filename="output_with_bgm.mp4"',
                     "X-BGM-Name": bgm_name,
-                    "Access-Control-Expose-Headers": "X-BGM-Name",
+                    "X-Source-Video-Mtime": source_mtime_iso,
+                    "Access-Control-Expose-Headers": "X-BGM-Name, X-Source-Video-Mtime",
                 })
             elif path == "/upload-bgm":
                 from urllib.parse import parse_qs
@@ -2513,6 +2546,18 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(200, "application/json", result_json)
             elif path == "/generate-community-post":
                 result_json = handle_generate_community_post(body)
+                self._send(200, "application/json", result_json)
+            elif path == "/collect-products":
+                result_json = handle_collect_products(body)
+                self._send(200, "application/json", result_json)
+            elif path == "/confirm-selection":
+                result_json = handle_confirm_selection(body)
+                self._send(200, "application/json", result_json)
+            elif path == "/request-copy":
+                result_json = handle_request_copy(body)
+                self._send(200, "application/json", result_json)
+            elif path == "/cancel-copy-request":
+                result_json = handle_cancel_copy_request(body)
                 self._send(200, "application/json", result_json)
             else:
                 self._send(404, "text/plain", b"Not Found")
