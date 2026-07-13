@@ -189,7 +189,8 @@ def _render_slide_hero(slide: dict, product_img: Image.Image | None, product_nam
         hy += line_h
 
     # 워터마크 폭을 먼저 계산 — 제품명이 이 폭을 침범하지 않도록 실측 기준으로 잘라낸다.
-    f_wm = _tw_font(22, bold=True)
+    # 제품명과 비슷한 비중으로 보이도록 폰트를 22 → 26으로 키움.
+    f_wm = _tw_font(26, bold=True)
     wm   = "생활꿀템연구소"
     wm_w = draw.textlength(wm, font=f_wm)
 
@@ -202,8 +203,14 @@ def _render_slide_hero(slide: dict, product_img: Image.Image | None, product_nam
     _tw_outline_text(draw, pname, SAFE_MARGIN_X, GRID_SAFE_BOTTOM, f_pname,
                      fill=_TC_GOLD, outline=(0, 0, 0), ow=3)
 
-    # 워터마크 (우측, 제품명과 같은 y — 흰색 외곽선 텍스트)
-    _tw_outline_text(draw, wm, W - SAFE_MARGIN_X - wm_w, GRID_SAFE_BOTTOM, f_wm,
+    # 워터마크 (우측, 흰색 외곽선 텍스트) — 제품명과 폰트 크기가 달라 같은 y에 그리면
+    # 위쪽 기준으로만 맞아 무게중심이 어긋나 보이므로, 제품명의 실측 세로 중심에
+    # 워터마크 자신의 세로 중심을 맞춘다.
+    pname_bbox   = draw.textbbox((0, 0), pname, font=f_pname)
+    wm_bbox      = draw.textbbox((0, 0), wm, font=f_wm)
+    pname_center = GRID_SAFE_BOTTOM + (pname_bbox[1] + pname_bbox[3]) / 2
+    wm_y         = int(pname_center - (wm_bbox[1] + wm_bbox[3]) / 2)
+    _tw_outline_text(draw, wm, W - SAFE_MARGIN_X - wm_w, wm_y, f_wm,
                      fill=C_WHITE, outline=(0, 0, 0), ow=3)
 
     # 하단 진행바 (4px — 카드가 아니라 진행 상태 표시용 얇은 바)
@@ -1140,9 +1147,24 @@ def _shorten_hook(text: str, max_words: int = 5) -> str:
 def _truncate_to_width(draw, text: str, font, max_w: int) -> str:
     """글자수가 아니라 실측 픽셀 폭 기준으로 말줄임. 제품명처럼 옆에 워터마크 등
     다른 요소와 같은 줄을 공유하는 텍스트가 굵은 폰트에서 예상보다 넓게 그려져
-    옆 요소를 침범하는 것을 방지한다."""
+    옆 요소를 침범하는 것을 방지한다. 공백이 있으면 단어 경계에서 먼저 잘라
+    "인체..."처럼 단어 중간이 어정쩡하게 끊기지 않게 하고, 공백이 없거나 첫
+    단어부터 안 들어가면 글자 단위로 자른다."""
     if draw.textlength(text, font=font) <= max_w:
         return text
+
+    words = text.split(" ")
+    if len(words) > 1:
+        candidate = ""
+        for w in words:
+            trial = (candidate + " " + w).strip()
+            if draw.textlength(trial + "…", font=font) <= max_w:
+                candidate = trial
+            else:
+                break
+        if candidate:
+            return candidate + "…"
+
     while text and draw.textlength(text + "…", font=font) > max_w:
         text = text[:-1]
     return (text + "…") if text else "…"
