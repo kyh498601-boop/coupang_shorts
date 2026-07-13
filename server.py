@@ -128,9 +128,104 @@ def b64_to_pil(data: str) -> Image.Image | None:
 
 
 # ──────────────────────────────────────────────────────────────
+# 1번 슬라이드 전용 — 썸네일(A안) 스타일을 세로 포맷에 맞게 강화한 "히어로" 인트로 디자인
+# 영상 첫 프레임으로 쓰이므로, YouTube Shorts가 PC/API 커스텀 썸네일을 지원하지 않는 정책
+# 제약을 대신 보완한다. 상단(제품 이미지)은 기존 Ken Burns 모션이 그대로 자연스럽게 이어지고,
+# 하단만 반투명 흰 카드 대신 브랜드 그린 패널 + 골드 뱃지 + 대형 외곽선 Hook 텍스트로 강화해
+# 정지 캡처 상태에서도 썸네일급 후킹력을 갖도록 한다. (_tw_* 헬퍼는 썸네일 생성 코드와 공유)
+# ──────────────────────────────────────────────────────────────
+def _render_slide_hero(slide: dict, product_img: Image.Image | None, product_name: str) -> bytes:
+    bg = Image.new("RGBA", (W, H), (30, 30, 30, 255))
+
+    if product_img:
+        src = product_img.convert("RGB")
+        sw, sh = src.size
+        scale = max(W / sw, H / sh)
+        bw, bh = int(sw * scale), int(sh * scale)
+        resized = src.resize((bw, bh), Image.LANCZOS)
+        cx, cy = (bw - W) // 2, (bh - H) // 2
+        blurred = resized.crop((cx, cy, cx + W, cy + H))
+        blurred = blurred.filter(ImageFilter.GaussianBlur(radius=BLUR_RADIUS))
+        dark = Image.new("RGB", (W, H), (0, 0, 0))
+        blurred = Image.blend(blurred, dark, 0.45)
+        bg = blurred.convert("RGBA")
+
+    # 상단 810px: 제품이미지 cover (기존 슬라이드와 동일 — Ken Burns 모션 자연스럽게 이어짐)
+    if product_img:
+        src = product_img.convert("RGBA")
+        sw, sh = src.size
+        scale = max(W / sw, IMG_AREA_H / sh)
+        dw, dh = int(sw * scale), int(sh * scale)
+        cover = src.resize((dw, dh), Image.LANCZOS)
+        cx = (dw - W) // 2
+        cy = (dh - IMG_AREA_H) // 2
+        crop = cover.crop((cx, cy, cx + W, cy + IMG_AREA_H))
+        bg.paste(crop, (0, 0), crop)
+
+    # 하단: 반투명 흰 카드 대신 브랜드 그린 패널 (썸네일 A안과 동일 톤, 강한 대비)
+    panel = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+    ImageDraw.Draw(panel).rounded_rectangle(
+        [0, CARD_Y, W, H], radius=32, fill=(*C_BRAND, 235),
+    )
+    bg = Image.alpha_composite(bg.convert("RGBA"), panel)
+    draw = ImageDraw.Draw(bg)
+
+    # 골드 포인트 라인 (썸네일 A안의 좌우 분할선과 같은 역할 — 상단 경계 강조)
+    draw.rectangle([0, CARD_Y, W, CARD_Y + 4], fill=_TC_GOLD)
+
+    # 슬라이드 진행 배지("1 / 10" 등) 완전 삭제 (2026-07-06) — 카테고리별 슬라이드 수가
+    # 10장→7장으로 바뀌면서 배지 유지 비용 대비 실효가 낮아 제거. 위치 기준점(bx, by)만 유지.
+    bx, by = SAFE_MARGIN_X, CARD_Y + 36
+
+    # 오늘의 추천 뱃지 (우측 상단, 썸네일 A안 참고)
+    badge_label = "🔥 오늘의 추천"
+    badge_w, badge_h = _tw_badge_size(26, badge_label)
+    _tw_badge(draw, W - SAFE_MARGIN_X - badge_w, by, badge_label,
+              bg_color=_TC_GOLD, text_color=(20, 60, 20), font_size=26)
+
+    # Hook 텍스트 — 헤드라인을 대형 외곽선 텍스트로 (정지 캡처에도 강한 후킹력, 최대 2줄)
+    headline   = slide.get("headline") or slide.get("title") or product_name or "오늘의 생활꿀템"
+    hook_short = _shorten_hook(headline, max_words=8)
+    text_x     = SAFE_MARGIN_X
+    text_w     = W - SAFE_MARGIN_X * 2
+    text_top   = by + max(36, badge_h) + 28
+    f_hook, lines, line_h = _tw_auto_font(draw, hook_short, text_w,
+                                          max_lines=2, size_max=72, size_min=36)
+    hy = text_top
+    for line in lines:
+        _tw_outline_text(draw, line, text_x, hy, f_hook,
+                         fill=C_WHITE, outline=(0, 0, 0), ow=4)
+        hy += line_h
+
+    # 제품명 서브텍스트
+    pname = product_name or "제품명"
+    if len(pname) > 22:
+        pname = pname[:22] + "…"
+    draw.text((SAFE_MARGIN_X, CARD_Y + CARD_H - 44), pname, font=_font(26), fill=(220, 245, 230))
+
+    # 워터마크 (우측 하단)
+    f_wm = _font(24, bold=True)
+    wm   = "생활꿀템연구소"
+    wm_w = draw.textlength(wm, font=f_wm)
+    draw.text((W - SAFE_MARGIN_X - wm_w, CARD_Y + CARD_H - 44), wm, font=f_wm, fill=C_WHITE)
+
+    # 하단 진행바
+    draw.rectangle([0, H - 4, W, H], fill=(224, 224, 224))
+    draw.rectangle([0, H - 4, int(W * 1 / SLIDE_TOTAL), H], fill=_TC_GOLD)
+
+    img = bg.convert("RGB")
+    print(f"[slide 1] 히어로 PNG size: {img.size}")
+    buf = io.BytesIO()
+    img.save(buf, format="PNG", dpi=DPI)
+    return buf.getvalue()
+
+
+# ──────────────────────────────────────────────────────────────
 # 슬라이드 1장 렌더  (1080 x 1350 PNG bytes)
 # ──────────────────────────────────────────────────────────────
 def render_slide(idx: int, slide: dict, product_img: Image.Image | None, product_name: str) -> bytes:
+    if idx == 0:
+        return _render_slide_hero(slide, product_img, product_name)
 
     # ── 1. 풀블리드 블러 배경 (cover, 1080x1350 전체) ──────────
     bg = Image.new("RGBA", (W, H), (30, 30, 30, 255))
