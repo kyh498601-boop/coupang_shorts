@@ -9,11 +9,12 @@ POST /generate-png  -> JSON {slides, images(base64[]), productName, category}
 
 [필수 수치 - 절대 변경 금지]
   PNG  : 1080 x 1350
-  상단  : 810px  (60%) - 제품이미지 cover
-  하단  : 513px  (38%) - 반투명 흰 카드 alpha=220
-  blur : GaussianBlur(28)
   dpi  : (72, 72)
   font : C:/Windows/Fonts/malgun.ttf / malgunbd.ttf
+
+2026-07-XX: 카드/뱃지 있던 상단60%+하단40% 고정 레이아웃을 폐기하고, 제품 사진이
+캔버스 전체를 채우는 카드 없는 레이아웃으로 재설계 (render_slide/_render_slide_hero
+참고, _full_bleed_photo_bg 공용 배경 + _tw_outline_text 외곽선 텍스트 직접 배치).
 """
 
 import base64
@@ -61,11 +62,6 @@ SLIDE_TOTAL = 7         # 2026-07-06: 10장 → 7장 구조로 재작성 (지침
 
 W           = 1080
 H           = 1350
-IMG_AREA_H  = 810       # 상단 60%  (제품이미지 끝 y)
-CARD_Y      = 810       # 카드 시작 = 이미지 끝 (갭 제거)
-CARD_H      = H - 810   # 540px
-CARD_ALPHA  = 220
-BLUR_RADIUS = 28
 DPI         = (72, 72)
 
 # 영상 컴포지션(1080x1920, 9:16)이 이 PNG(1080x1350, 4:5)를 objectFit:"cover"로
@@ -80,10 +76,7 @@ FONT_BOLD = "C:/Windows/Fonts/malgunbd.ttf"
 
 # 브랜드 컬러
 C_BRAND     = (46, 139,  87)   # #2E8B57
-C_BRAND_DRK = (27,  94,  59)   # #1B5E3B
 C_WHITE     = (255, 255, 255)
-C_GRAY_800  = ( 66,  66,  66)  # #424242
-C_GRAY_600  = (117, 117, 117)  # #757575
 
 MIME = {
     ".html": "text/html; charset=utf-8",
@@ -100,59 +93,6 @@ MIME = {
 
 
 # ──────────────────────────────────────────────────────────────
-# 폰트
-# ──────────────────────────────────────────────────────────────
-def _font(size: int, bold: bool = False) -> ImageFont.FreeTypeFont:
-    try:
-        return ImageFont.truetype(FONT_BOLD if bold else FONT_REG, size)
-    except Exception:
-        return ImageFont.load_default()
-
-
-# ──────────────────────────────────────────────────────────────
-# 텍스트 래핑 (한국어 글자 단위)
-# ──────────────────────────────────────────────────────────────
-def wrap_text(draw: ImageDraw.ImageDraw, text: str, font, max_w: int) -> list[str]:
-    lines = []
-    for para in text.split("\n"):
-        line = ""
-        for ch in para:
-            if draw.textlength(line + ch, font=font) <= max_w:
-                line += ch
-            else:
-                if line:
-                    lines.append(line)
-                line = ch
-        if line:
-            lines.append(line)
-    return lines or [text]
-
-
-def draw_block(draw, text, x, y, font, fill, max_w, line_h, max_lines) -> int:
-    lines = wrap_text(draw, text, font, max_w)[:max_lines]
-    for i, line in enumerate(lines):
-        draw.text((x, y + i * line_h), line, font=font, fill=fill)
-    return len(lines)
-
-
-def draw_autofit_block(draw, text, x, y, bold, fill, max_w, line_h, max_lines,
-                       size_max, size_min, step=4) -> int:
-    """max_lines 안에 들어올 때까지 폰트 크기를 줄여가며 그린다 (글자수 초과로
-    뒷부분이 통째로 잘리는 것을 방지 — size_min에서도 넘치면 그때만 max_lines로 자른다)."""
-    size = size_max
-    font = _font(size, bold=bold)
-    lines = wrap_text(draw, text, font, max_w)
-    while len(lines) > max_lines and size > size_min:
-        size -= step
-        font = _font(size, bold=bold)
-        lines = wrap_text(draw, text, font, max_w)
-    lines = lines[:max_lines]
-    for i, line in enumerate(lines):
-        draw.text((x, y + i * line_h), line, font=font, fill=fill)
-    return len(lines)
-
-
-# ──────────────────────────────────────────────────────────────
 # base64 data-URL -> PIL Image
 # ──────────────────────────────────────────────────────────────
 def b64_to_pil(data: str) -> Image.Image | None:
@@ -165,88 +105,97 @@ def b64_to_pil(data: str) -> Image.Image | None:
 
 
 # ──────────────────────────────────────────────────────────────
-# 1번 슬라이드 전용 — 썸네일(A안) 스타일을 세로 포맷에 맞게 강화한 "히어로" 인트로 디자인
-# 영상 첫 프레임으로 쓰이므로, YouTube Shorts가 PC/API 커스텀 썸네일을 지원하지 않는 정책
-# 제약을 대신 보완한다. 상단(제품 이미지)은 기존 Ken Burns 모션이 그대로 자연스럽게 이어지고,
-# 하단만 반투명 흰 카드 대신 브랜드 그린 패널 + 골드 뱃지 + 대형 외곽선 Hook 텍스트로 강화해
-# 정지 캡처 상태에서도 썸네일급 후킹력을 갖도록 한다. (_tw_* 헬퍼는 썸네일 생성 코드와 공유)
+# 카드 없는 공용 배경 — 제품 사진을 캔버스 전체(1080x1350)에 cover로 꽉 채우고,
+# 필요 시 상/하단에 텍스트 가독성 보조용 그라데이션을 얹는다. 카드 패널이 아니라
+# 사진 중앙부는 그대로 노출하고 텍스트가 놓이는 존만 살짝 어둡게 하는 방식 — 옛날
+# '쿠팡파트너스 인기 상품 자동수집 프로그램' 프로젝트(Documents\쿠팡파트너스...\
+# shorts_creator\card_generator.py의 make_thumbnail_card())의 하단 그라데이션 기법을
+# 상/하 양쪽에 적용한 것. _render_slide_hero()와 render_slide()가 공유한다.
 # ──────────────────────────────────────────────────────────────
-def _render_slide_hero(slide: dict, product_img: Image.Image | None, product_name: str) -> bytes:
+def _full_bleed_photo_bg(product_img: Image.Image | None,
+                          top_grad_h: int = 0, top_grad_alpha: int = 0,
+                          bottom_grad_h: int = 0, bottom_grad_alpha: int = 0) -> Image.Image:
     bg = Image.new("RGBA", (W, H), (30, 30, 30, 255))
 
     if product_img:
-        src = product_img.convert("RGB")
-        sw, sh = src.size
-        scale = max(W / sw, H / sh)
-        bw, bh = int(sw * scale), int(sh * scale)
-        resized = src.resize((bw, bh), Image.LANCZOS)
-        cx, cy = (bw - W) // 2, (bh - H) // 2
-        blurred = resized.crop((cx, cy, cx + W, cy + H))
-        blurred = blurred.filter(ImageFilter.GaussianBlur(radius=BLUR_RADIUS))
-        dark = Image.new("RGB", (W, H), (0, 0, 0))
-        blurred = Image.blend(blurred, dark, 0.45)
-        bg = blurred.convert("RGBA")
-
-    # 상단 810px: 제품이미지 cover (기존 슬라이드와 동일 — Ken Burns 모션 자연스럽게 이어짐)
-    if product_img:
         src = product_img.convert("RGBA")
         sw, sh = src.size
-        scale = max(W / sw, IMG_AREA_H / sh)
+        scale = max(W / sw, H / sh)
         dw, dh = int(sw * scale), int(sh * scale)
         cover = src.resize((dw, dh), Image.LANCZOS)
         cx = (dw - W) // 2
-        cy = (dh - IMG_AREA_H) // 2
-        crop = cover.crop((cx, cy, cx + W, cy + IMG_AREA_H))
+        cy = (dh - H) // 2
+        crop = cover.crop((cx, cy, cx + W, cy + H))
         bg.paste(crop, (0, 0), crop)
 
-    # 하단: 반투명 흰 카드 대신 브랜드 그린 패널 (썸네일 A안과 동일 톤, 강한 대비)
-    panel = Image.new("RGBA", (W, H), (0, 0, 0, 0))
-    ImageDraw.Draw(panel).rounded_rectangle(
-        [0, CARD_Y, W, H], radius=32, fill=(*C_BRAND, 235),
-    )
-    bg = Image.alpha_composite(bg.convert("RGBA"), panel)
+    if top_grad_h and top_grad_alpha:
+        top_grad = Image.new("RGBA", (W, top_grad_h), (0, 0, 0, 0))
+        tgd = ImageDraw.Draw(top_grad)
+        for i in range(top_grad_h):
+            tgd.line([(0, i), (W, i)], fill=(0, 0, 0, int(top_grad_alpha * (1 - i / top_grad_h))))
+        bg.paste(top_grad, (0, 0), top_grad)
+
+    if bottom_grad_h and bottom_grad_alpha:
+        bottom_grad = Image.new("RGBA", (W, bottom_grad_h), (0, 0, 0, 0))
+        bgd = ImageDraw.Draw(bottom_grad)
+        for i in range(bottom_grad_h):
+            bgd.line([(0, i), (W, i)], fill=(0, 0, 0, int(bottom_grad_alpha * (i / bottom_grad_h))))
+        bg.paste(bottom_grad, (0, H - bottom_grad_h), bottom_grad)
+
+    return bg
+
+
+# ──────────────────────────────────────────────────────────────
+# 1번 슬라이드 전용 — 카드/뱃지 없이 제품 사진 전체를 배경으로 채우고 그 위에 외곽선
+# 텍스트를 직접 얹는 "히어로" 인트로 디자인 (2026-07-XX 재설계). 옛날 '쿠팡파트너스
+# 인기 상품 자동수집 프로그램' 프로젝트(Documents\쿠팡파트너스...\shorts_creator\
+# card_generator.py의 make_thumbnail_card()/_draw_text())의 카드 없는 스타일을 참고 —
+# 배경 사진을 그대로 노출하고, 검은 외곽선 + 흰색/골드 텍스트만으로 가독성을 확보한다.
+# 영상 첫 프레임으로 쓰이므로, YouTube Shorts가 PC/API 커스텀 썸네일을 지원하지 않는 정책
+# 제약을 대신 보완한다. (_tw_* 헬퍼는 썸네일 생성 코드와 공유)
+# ──────────────────────────────────────────────────────────────
+def _render_slide_hero(slide: dict, product_img: Image.Image | None, product_name: str) -> bytes:
+    bg = _full_bleed_photo_bg(product_img,
+                               top_grad_h=480, top_grad_alpha=110,
+                               bottom_grad_h=320, bottom_grad_alpha=140)
     draw = ImageDraw.Draw(bg)
 
-    # 골드 포인트 라인 (썸네일 A안의 좌우 분할선과 같은 역할 — 상단 경계 강조)
-    draw.rectangle([0, CARD_Y, W, CARD_Y + 4], fill=_TC_GOLD)
+    # 그리드(Home/탐색/구독/검색) 4:5 크롭 시 이 PNG 좌표 기준 y≈[205, 1145] 밖은
+    # 잘려나간다 (영상(9:16)이 이 PNG(4:5)를 object-fit:cover하는 1단계 크롭을 역산한
+    # 범위에 여유버퍼를 더한 값). 헤드라인/제품명/워터마크 전부 이 범위 안에 배치한다.
+    # (idx≥1 슬라이드는 영상 재생 중간 프레임이라 이 그리드 크롭과 무관 — render_slide 참고)
+    GRID_SAFE_TOP    = 280
+    GRID_SAFE_BOTTOM = 1100
 
-    # 슬라이드 진행 배지("1 / 10" 등) 완전 삭제 (2026-07-06) — 카테고리별 슬라이드 수가
-    # 10장→7장으로 바뀌면서 배지 유지 비용 대비 실효가 낮아 제거. 위치 기준점(bx, by)만 유지.
-    bx, by = SAFE_MARGIN_X, CARD_Y + 36
-
-    # 오늘의 추천 뱃지 (우측 상단, 썸네일 A안 참고)
-    badge_label = "🔥 오늘의 추천"
-    badge_w, badge_h = _tw_badge_size(26, badge_label)
-    _tw_badge(draw, W - SAFE_MARGIN_X - badge_w, by, badge_label,
-              bg_color=_TC_GOLD, text_color=(20, 60, 20), font_size=26)
-
-    # Hook 텍스트 — 헤드라인을 대형 외곽선 텍스트로 (정지 캡처에도 강한 후킹력, 최대 2줄)
+    # Hook 텍스트 — 상단부, 카드 없이 사진 위에 대형 외곽선 텍스트로 직접 배치 (최대 2줄)
     headline   = slide.get("headline") or slide.get("title") or product_name or "오늘의 생활꿀템"
     hook_short = _shorten_hook(headline, max_words=8)
     text_x     = SAFE_MARGIN_X
     text_w     = W - SAFE_MARGIN_X * 2
-    text_top   = by + max(36, badge_h) + 28
     f_hook, lines, line_h = _tw_auto_font(draw, hook_short, text_w,
                                           max_lines=2, size_max=72, size_min=36)
-    hy = text_top
+    hy = GRID_SAFE_TOP
     for line in lines:
         _tw_outline_text(draw, line, text_x, hy, f_hook,
                          fill=C_WHITE, outline=(0, 0, 0), ow=4)
         hy += line_h
 
-    # 제품명 서브텍스트
+    # 제품명 — 하단부, 골드 외곽선 텍스트 (뱃지 대신 이 텍스트 자체가 포인트 컬러 역할)
     pname = product_name or "제품명"
     if len(pname) > 22:
         pname = pname[:22] + "…"
-    draw.text((SAFE_MARGIN_X, CARD_Y + CARD_H - 44), pname, font=_font(26), fill=(220, 245, 230))
+    f_pname = _tw_font(28, bold=True)
+    _tw_outline_text(draw, pname, SAFE_MARGIN_X, GRID_SAFE_BOTTOM, f_pname,
+                     fill=_TC_GOLD, outline=(0, 0, 0), ow=3)
 
-    # 워터마크 (우측 하단)
-    f_wm = _font(24, bold=True)
+    # 워터마크 (우측, 제품명과 같은 y — 흰색 외곽선 텍스트)
+    f_wm = _tw_font(22, bold=True)
     wm   = "생활꿀템연구소"
     wm_w = draw.textlength(wm, font=f_wm)
-    draw.text((W - SAFE_MARGIN_X - wm_w, CARD_Y + CARD_H - 44), wm, font=f_wm, fill=C_WHITE)
+    _tw_outline_text(draw, wm, W - SAFE_MARGIN_X - wm_w, GRID_SAFE_BOTTOM, f_wm,
+                     fill=C_WHITE, outline=(0, 0, 0), ow=3)
 
-    # 하단 진행바
+    # 하단 진행바 (4px — 카드가 아니라 진행 상태 표시용 얇은 바)
     draw.rectangle([0, H - 4, W, H], fill=(224, 224, 224))
     draw.rectangle([0, H - 4, int(W * 1 / SLIDE_TOTAL), H], fill=_TC_GOLD)
 
@@ -264,95 +213,67 @@ def render_slide(idx: int, slide: dict, product_img: Image.Image | None, product
     if idx == 0:
         return _render_slide_hero(slide, product_img, product_name)
 
-    # ── 1. 풀블리드 블러 배경 (cover, 1080x1350 전체) ──────────
-    bg = Image.new("RGBA", (W, H), (30, 30, 30, 255))
-
-    if product_img:
-        src = product_img.convert("RGB")
-        sw, sh = src.size
-        scale = max(W / sw, H / sh)           # cover: 빈틈 없이 채움
-        bw, bh = int(sw * scale), int(sh * scale)
-        resized = src.resize((bw, bh), Image.LANCZOS)
-        # 중앙 crop
-        cx, cy = (bw - W) // 2, (bh - H) // 2
-        blurred = resized.crop((cx, cy, cx + W, cy + H))
-        blurred = blurred.filter(ImageFilter.GaussianBlur(radius=BLUR_RADIUS))
-        # brightness 0.55 (45% 어둡게)
-        dark = Image.new("RGB", (W, H), (0, 0, 0))
-        blurred = Image.blend(blurred, dark, 0.45)
-        bg = blurred.convert("RGBA")
-
-    # ── 2. 상단 810px: 제품이미지 cover ────────────────────────
-    if product_img:
-        src = product_img.convert("RGBA")
-        sw, sh = src.size
-        scale = max(W / sw, IMG_AREA_H / sh)  # cover: 810px 영역 꽉 채움
-        dw, dh = int(sw * scale), int(sh * scale)
-        cover = src.resize((dw, dh), Image.LANCZOS)
-        cx = (dw - W) // 2
-        cy = (dh - IMG_AREA_H) // 2
-        crop = cover.crop((cx, cy, cx + W, cy + IMG_AREA_H))
-        bg.paste(crop, (0, 0), crop)
-
-    # ── 3. 하단 513px: 반투명 흰 카드 (alpha=220) ───────────────
-    # 블러 배경(제품 색상)이 반투명 레이어 밑으로 비쳐 베이지/크림톤으로 보이는 문제 방지:
-    # 카드 영역을 불투명 흰색으로 먼저 마스킹한 뒤, 지침값 alpha=220 레이어를 얹는다
-    # (같은 흰색 위 오버레이라 결과색은 순백 유지, CARD_ALPHA 값 자체는 지침대로 보존).
-    card_base = Image.new("RGBA", (W, H), (0, 0, 0, 0))
-    ImageDraw.Draw(card_base).rounded_rectangle(
-        [0, CARD_Y, W, H], radius=32, fill=(255, 255, 255, 255),
-    )
-    bg = Image.alpha_composite(bg.convert("RGBA"), card_base)
-
-    card_layer = Image.new("RGBA", (W, H), (0, 0, 0, 0))
-    ImageDraw.Draw(card_layer).rounded_rectangle(
-        [0, CARD_Y, W, H], radius=32,
-        fill=(255, 255, 255, CARD_ALPHA),
-    )
-    bg = Image.alpha_composite(bg.convert("RGBA"), card_layer)
+    # ── 1. 카드 없는 공용 배경 — 제품 사진이 캔버스 전체를 채우고, 상/하단에
+    # 텍스트 가독성 보조 그라데이션 (히어로와 동일 기법, _full_bleed_photo_bg 공유).
+    # idx≥1은 헤드라인+본문이 함께 들어가 히어로보다 상단 텍스트 블록이 커질 수 있어
+    # top_grad_h를 더 크게 잡는다.
+    bg = _full_bleed_photo_bg(product_img,
+                               top_grad_h=560, top_grad_alpha=120,
+                               bottom_grad_h=260, bottom_grad_alpha=130)
     draw = ImageDraw.Draw(bg)
 
-    # ── 4. 슬라이드 진행 배지("N / 7" 등) 완전 삭제 (2026-07-06) ────
-    # 위치 기준점(bx, by)만 유지 — 아래 헤드라인/본문 레이아웃이 이 좌표를 기준으로 배치된다.
-    bx, by = SAFE_MARGIN_X, CARD_Y + 36
+    # idx≥1은 영상 재생 중간 프레임이라 그리드 정지썸네일 크롭과 무관(그리드 크롭은
+    # 첫 프레임=히어로만 해당) — 카드가 없어 확보된 넉넉한 공간에 여유있게 배치한다.
+    TOP_TEXT_Y    = 260
+    BOTTOM_TEXT_Y = H - 130
+    text_x        = SAFE_MARGIN_X
+    text_w        = W - SAFE_MARGIN_X * 2
 
-    # ── 5. Headline (bold 54px, 넘치면 34px까지 auto-fit 축소) ────
+    # ── 2. Headline — 상단부, 카드 없이 사진 위에 외곽선 텍스트로 직접 배치.
+    # 슬라이드마다 길이가 다른 카피가 들어오므로 _tw_auto_font로 최대 2줄 안에
+    # 들어올 때까지 폰트를 축소해 겹침을 방지한다.
     headline = slide.get("headline") or slide.get("title") or ""
-    n_head_lines = draw_autofit_block(draw, headline,
-               x=SAFE_MARGIN_X, y=CARD_Y + 108, bold=True, fill=C_BRAND_DRK,
-               max_w=W - SAFE_MARGIN_X * 2, line_h=66, max_lines=2,
-               size_max=54, size_min=34)
+    f_head, head_lines, head_line_h = _tw_auto_font(draw, headline, text_w,
+                                                     max_lines=2, size_max=54, size_min=30)
+    hy = TOP_TEXT_Y
+    for line in head_lines:
+        _tw_outline_text(draw, line, text_x, hy, f_head,
+                         fill=C_WHITE, outline=(0, 0, 0), ow=3)
+        hy += head_line_h
 
-    # ── 6. Body 카피 (regular 30px) — 헤드라인 바로 아래 ───────────
-    # 과거엔 Remotion Caption(음성 동기화 자막)과 중복 표시된다는 이유로 이 블록을 통째로
-    # 삭제했었는데, 실제로는 두 시스템이 서로 다른 산출물(PNG 캐러셀 vs 영상)이라 화면에서
-    # 동시에 보일 일이 없어 body가 항상 빈 채로 나가는 회귀만 남았다 — 다시 그린다.
+    # ── 3. Body 카피 — 헤드라인 바로 아래, 마찬가지로 autofit(최대 3줄)으로
+    # 본문 길이에 따라 폰트를 줄여가며 헤드라인 블록과 겹치지 않게 그린다.
     body = (slide.get("body") or "").strip()
     if body:
-        body_y = CARD_Y + 108 + n_head_lines * 66 + 14
-        draw_block(draw, body,
-                   x=SAFE_MARGIN_X, y=body_y,
-                   font=_font(30), fill=C_GRAY_800,
-                   max_w=W - SAFE_MARGIN_X * 2, line_h=40, max_lines=3)
+        body_y = hy + 20
+        f_body, body_lines, body_line_h = _tw_auto_font(draw, body, text_w,
+                                                         max_lines=3, size_max=32, size_min=22)
+        by_ = body_y
+        for line in body_lines:
+            _tw_outline_text(draw, line, text_x, by_, f_body,
+                             fill=(255, 244, 214), outline=(0, 0, 0), ow=2)
+            by_ += body_line_h
 
-    # ── 8. 제품명 서브텍스트 (30px) ─────────────────────────────
+    # ── 4. 제품명 — 하단부, 골드 외곽선 텍스트 (히어로와 동일 스타일)
     pname = product_name or "제품명"
     if len(pname) > 22:
         pname = pname[:22] + "…"
-    draw.text((SAFE_MARGIN_X, CARD_Y + CARD_H - 80), pname, font=_font(30), fill=C_GRAY_600)
+    f_pname = _tw_font(26, bold=True)
+    _tw_outline_text(draw, pname, SAFE_MARGIN_X, BOTTOM_TEXT_Y, f_pname,
+                     fill=_TC_GOLD, outline=(0, 0, 0), ow=3)
 
-    # ── 9. 워터마크 (bold 26px, 우측) ───────────────────────────
-    f_wm = _font(26, bold=True)
+    # ── 5. 워터마크 — 우측, 제품명과 같은 y, 흰색 외곽선 텍스트 (히어로와 동일 스타일)
+    f_wm = _tw_font(22, bold=True)
     wm   = "생활꿀템연구소"
     wm_w = draw.textlength(wm, font=f_wm)
-    draw.text((W - SAFE_MARGIN_X - wm_w, CARD_Y + CARD_H - 80), wm, font=f_wm,
-              fill=(46, 139, 87, 191))   # rgba(46,139,87,0.75)
+    _tw_outline_text(draw, wm, W - SAFE_MARGIN_X - wm_w, BOTTOM_TEXT_Y, f_wm,
+                     fill=C_WHITE, outline=(0, 0, 0), ow=3)
 
-    # ── 10. 하단 진행바 (4px) ───────────────────────────────────
+    # ── 6. 하단 진행바 (4px) ───────────────────────────────────
     draw.rectangle([0, H - 4, W, H], fill=(224, 224, 224))
     draw.rectangle([0, H - 4, int(W * (idx + 1) / SLIDE_TOTAL), H], fill=C_BRAND)
 
-    # ── 11. PNG bytes ────────────────────────────────────────────
+    # ── 7. PNG bytes ────────────────────────────────────────────
     img = bg.convert("RGB")
     print(f"[slide {idx+1}] PNG size: {img.size}")
     buf = io.BytesIO()
