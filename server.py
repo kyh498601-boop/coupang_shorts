@@ -25,6 +25,7 @@ import random
 import re
 import subprocess
 import traceback
+import urllib.error
 import urllib.request
 import wave
 import zipfile
@@ -49,6 +50,8 @@ import threading as _threading
 _render_lock  = _threading.Lock()
 _render_state: dict = {"running": False, "done": False, "exitCode": None, "log": []}
 _ANSI_RE = __import__("re").compile(r"\x1b\[[0-9;]*[mK]")
+
+SLIDE_TOTAL = 7         # 2026-07-06: 10장 → 7장 구조로 재작성 (지침 STEP5 참조)
 
 W           = 1080
 H           = 1350
@@ -399,83 +402,256 @@ _SUPPLEMENTS = [
     "서두르세요, 특가 곧 끝나요.",
 ]
 
-# 슬라이드 인덱스별 완전 독립 나레이션 문장 (카피 텍스트 직접 삽입 안 함)
-# p = 제품명, 각 문장은 구어체로 완결된 독립 문장
-_NARRATION_TEMPLATES = [
-    # 0 — 후킹: 시선 차단, 질문형
-    lambda p: f"잠깐, 이거 한 번만 봐주세요. 오늘 소개할 제품 진짜예요.",
-    # 1 — 추천 대상: 공감형
-    lambda p: f"이런 고민 있으신 분들, 딱 기다리던 제품이에요.",
-    # 2 — 핵심 성분·기능: 호기심 유발
-    lambda p: f"어떤 성분이 들어 있는지 먼저 확인해볼게요. 생각보다 놀라워요.",
-    # 3 — 효능·성능: 신뢰 구축
-    lambda p: f"흡수력이랑 보습력이 동시에 올라가요. 직접 써보니까 확실히 달라요.",
-    # 4 — 사용감·경험: 공감 + 실사용
-    lambda p: f"발랐을 때 느낌이 정말 좋아요. 끈적임 없이 바로 스며들어요.",
-    # 5 — 전후 효과·사용 시나리오: 기대감
-    lambda p: f"꾸준히 쓰면 피부 결이 달라지는 게 느껴져요. 2주면 충분해요.",
-    # 6 — 인증·수상: 권위·신뢰
-    lambda p: f"피부과 테스트 완료 제품이에요. 인증이 신뢰를 말해주죠.",
-    # 7 — 상품평 재가공: 사회적 증거
-    lambda p: f"수만 명이 선택했고, 평점도 굉장히 높아요. 이유가 있는 거예요.",
-    # 8 — 특가 안내: 긴박감 (가격 수치 없이)
-    lambda p: f"지금 딱 좋은 타이밍이에요. 역대급 할인 진행 중이거든요.",
-    # 9 — CTA: 행동 유도
-    lambda p: f"구매 링크는 프로필에서 확인하세요. 놓치면 후회해요!",
+# 식품 전용 보충 문장 — "사용"류(써보다/경험하다) 표현만 "먹다/드시다"류로 교체하고
+# 나머지(추천드려요/좋아하세요 등 음식과 무관한 범용 문구)는 그대로 재사용한다.
+_SUPPLEMENTS_FOOD = [
+    "지금 바로 확인해보세요.",
+    "한번 드셔보면 알 거예요.",
+    "정말 추천드려요.",
+    "많은 분들이 좋아하세요.",
+    "직접 드셔보시길 바라요.",
+    "놓치지 마세요.",
+    "진짜 대박이에요.",
+    "후회 없을 거예요.",
+    "인증된 제품이에요.",
+    "서두르세요, 특가 곧 끝나요.",
 ]
+
+# 슬라이드에 headline/body가 전혀 없을 때만 쓰는 최후 폴백(범용 문구). 2026-07-06까지는
+# 이 배열이 나레이션의 유일한 소스였고 슬라이드 실제 내용(headline/body)과 무관하게
+# 인덱스 위치만으로 고정 문구를 내보내 카테고리별 카피와 나레이션이 어긋나는 버그가 있었다
+# (예: 3번 슬라이드가 "핵심 특징 & 안전인증"이어도 나레이션은 항상 "성분도 안전도
+# 확실해요"). 지금은 `_narration_from_slide()`가 실제 headline/body를 요약해 우선 사용하고,
+# 이 배열은 그 요약이 불가능할 때(빈 슬라이드)만 폴백으로 쓰인다.
+_NARRATION_TEMPLATES = [
+    lambda p: f"잠깐, 이거 꼭 봐야 해요",
+    lambda p: f"이런 분들께 딱 맞아요",
+    lambda p: f"핵심 포인트를 확인해요",
+    lambda p: f"써보면 바로 차이 알아요",
+    lambda p: f"자세한 정보를 알려드려요",
+    lambda p: f"다들 극찬하는 이유가 있어요",
+    lambda p: f"지금 바로 가격 확인하세요",
+]
+
+# 식품 전용 폴백 나레이션 — "사용"류 표현(3번 항목 "써보면 바로 차이 알아요")만
+# "먹다/드시다"류로 교체. 나머지는 음식 여부와 무관해 그대로 재사용한다.
+_NARRATION_TEMPLATES_FOOD = [
+    lambda p: f"잠깐, 이거 꼭 봐야 해요",
+    lambda p: f"이런 분들께 딱 맞아요",
+    lambda p: f"핵심 포인트를 확인해요",
+    lambda p: f"한입 드셔보면 알아요",
+    lambda p: f"자세한 정보를 알려드려요",
+    lambda p: f"다들 극찬하는 이유가 있어요",
+    lambda p: f"지금 바로 가격 확인하세요",
+]
+
+# headline에 남아있는 화면 전용 기호 제거 규칙 + "&"/"/" 로 연결된 두 구절을 나누는 패턴.
+# 자를 때 항상 "구절" 단위로만 잘라(단어 중간 절단 금지) "믿을 원재료" 같은
+# 관형어+명사 조합이 "믿을"만 남고 잘리는 문법 파손을 막는다.
+_NARRATION_STRIP_PATTERN = re.compile(r"[①②③④⑤\"'“”‘’→↔]")
+_NARRATION_CLAUSE_SPLIT  = re.compile(r"\s*[&/]\s*")
+
+
+def _has_batchim(char: str) -> bool:
+    """한글 완성형 음절 1글자의 받침(종성) 유무를 판별한다.
+    (코드포인트 - 0xAC00) % 28 == 0 이면 종성이 없는 음절(받침 없음).
+    한글 완성형 범위(가~힣) 밖의 문자(영문/숫자/기호 등)는 받침 없는 것으로 간주한다."""
+    if not char:
+        return False
+    code = ord(char) - 0xAC00
+    if not (0 <= code <= 11171):  # 0x0 ~ 0x2BA3 (가~힣) 범위 밖 → 한글 완성형 아님
+        return False
+    return code % 28 != 0
+
+
+def _narration_from_slide(slide: dict) -> str:
+    """슬라이드의 실제 headline/body(SLIDE_COPY, dashboard.html에서 전달됨)를 12~15자
+    내외 구어체 나레이션으로 요약한다. 카테고리가 바뀌어 headline/body 내용이 달라지면
+    나레이션도 그에 맞춰 자동으로 달라진다 — 고정 인덱스 템플릿이 아니라 슬라이드
+    내용 자체가 소스이기 때문. headline/body가 비어 있으면 빈 문자열을 반환해
+    호출부(build_narration)가 _NARRATION_TEMPLATES 폴백을 쓰도록 한다.
+    """
+    headline = (slide.get("headline") or slide.get("title") or "").strip()
+    body     = (slide.get("body") or "").strip()
+    if not headline:
+        return ""
+
+    headline = _NARRATION_STRIP_PATTERN.sub("", headline).strip()
+    parts = [p.strip() for p in _NARRATION_CLAUSE_SPLIT.split(headline) if p.strip()]
+    text = parts[0] if parts else headline
+
+    # "A & B" 형태 헤드라인이면, 여유가 있을 때만 두 번째 구절까지 구절 단위로 이어붙임
+    for extra in parts[1:]:
+        candidate = f"{text}이랑 {extra}"
+        if len(candidate) <= 14:
+            text = candidate
+        else:
+            break
+
+    # 헤드라인만으로 너무 짧으면(8자 미만) 본문 첫 구절을 짧게 보완
+    if len(text) < 8 and body:
+        first_clause = re.split(r"[\n,.]", body)[0].strip()
+        first_clause = _NARRATION_STRIP_PATTERN.sub("", first_clause).strip()
+        if first_clause:
+            candidate = f"{text} {first_clause}"
+            if len(candidate) <= 17:
+                text = candidate
+
+    # 자연스러운 구어체 종결어미 보정 (이미 종결어미면 원문 그대로 둠, "하기"는 "해요"로 자연화)
+    # "?"/"!" 등 말끝 문장부호가 남아있으면 종결어미 판정 전에 먼저 떼어내야
+    # "맞을까요?" 뒤에 "예요"가 중복으로 덧붙는 걸 막을 수 있다 (문장부호 자체는 보존).
+    had_question = text.endswith("?")
+    bare = text.rstrip("?!")
+    if had_question:
+        # 물음표로 끝나는 헤드라인은 그 앞이 "는/은/가/이/까" 등 어떤 조사·어미로 끝나든
+        # 그 자체로 이미 완결된 구어체 질문이라 코퓰러를 붙이면 안 됨
+        # (예: "후기는?"+"이에요" → "후기는이에요" 파손, "인정?"+"이에요" → "인정이에요" 어색).
+        text = bare + "?"
+    elif bare.endswith("하기"):
+        text = bare[:-2] + "해요"
+    elif bare and not re.search(r"(요|죠|다|까)$", bare):
+        # 받침 유무에 따라 "이에요"/"예요" 자동 분기 (예: "법" → 이에요, "차이" → 예요)
+        particle = "이에요" if _has_batchim(bare[-1]) else "예요"
+        text = bare + particle
+
+    return text
 
 
 def build_narration(slide: dict, product_name: str, idx: int,
-                    sec_per_slide: float = 2.5) -> str:
-    """슬라이드당 허용 시간(sec_per_slide)에 맞게 나레이션 텍스트 자동 조정.
+                    sec_per_slide: float = 2.5, category: str = "") -> str:
+    """슬라이드 나레이션 텍스트를 만든다.
 
-    - 짧은 슬롯(3s): 기본 템플릿 트림
-    - 긴 슬롯(4~5s): 보충 문장 자동 추가 → 시간을 자연스럽게 채움
+    문장을 중간에 잘라내지 않는다(완성 문장 보장) — TTS와 자막이 항상 같은 함수 결과를
+    공유하므로, 여기서 자르면 음성도 자막도 같이 잘려서 의미가 끊긴 채로 끝난다.
+    타이밍 보정은 텍스트 길이가 아니라 atempo(배속) 쪽에서 전담한다.
+    - 짧은 슬롯: 기본 템플릿 그대로(트림 없음)
+    - 긴 슬롯(4s 이상)이고 여유가 있으면: 보충 문장 추가 → 시간을 자연스럽게 채움
+
+    2026-07-06: 나레이션 소스를 슬라이드 실제 headline/body(_narration_from_slide)로
+    우선 사용하도록 변경 — 이전에는 _NARRATION_TEMPLATES[idx] 고정 문구만 써서 카테고리별
+    카피(SLIDE_COPY)와 나레이션 내용이 어긋났다. headline/body가 없는 경우에만
+    _NARRATION_TEMPLATES로 폴백한다.
+
+    category가 식품/식품_신선이면 폴백 템플릿·보충 문장을 "먹다/드시다"류 어휘 세트
+    (_NARRATION_TEMPLATES_FOOD/_SUPPLEMENTS_FOOD)로 바꿔 "실사용자"·"써보시면" 같은
+    기기 사용을 연상시키는 표현이 나가지 않도록 한다.
     """
-    import re
     p = product_name or "이 제품"
+    is_food = category in _FOOD_CATEGORIES
 
-    template  = _NARRATION_TEMPLATES[idx] if idx < len(_NARRATION_TEMPLATES) else _NARRATION_TEMPLATES[-1]
-    narration = template(p)
+    narration = _narration_from_slide(slide)
+    if not narration:
+        templates = _NARRATION_TEMPLATES_FOOD if is_food else _NARRATION_TEMPLATES
+        template  = templates[idx] if idx < len(templates) else templates[-1]
+        narration = template(p)
 
     narration = re.sub(r"[→#\*_`]", "", narration)
+    # 필러(말 멈춤 표현) 제거: 다른 한글 음절에 붙어있지 않고 독립된 "음/아/어"(반복·물결 포함)만 제거
+    # 자막-음성 1:1 일치를 위해 필러가 텍스트에 섞이지 않도록 항상 방어적으로 정리한다.
+    narration = re.sub(r"(?<![가-힣])[음아어]+[~]*(?![가-힣])", "", narration)
+    narration = re.sub(r"\s*,\s*,", ",", narration)          # 필러 제거로 남은 중복 쉼표 정리
+    narration = re.sub(r"^[,.\s~]+", "", narration)          # 문두에 남은 군더더기 정리
     narration = re.sub(r"\s{2,}", " ", narration).strip()
 
-    max_chars = int(sec_per_slide * _CHARS_PER_SEC)  # 허용 최대 문자 수
+    max_chars = int(sec_per_slide * _CHARS_PER_SEC)  # 보충 문장 추가 여부 판단 전용 (트림에는 더 이상 쓰지 않음)
 
-    # 슬롯이 넉넉하고 여백이 있으면 보충 문장 추가
+    # 슬롯이 넉넉하고 여백이 있으면 보충 문장 추가 (문장을 자르는 게 아니라 채워서 시간 맞춤)
     if sec_per_slide >= 4.0 and len(narration) < max_chars - 8:
-        supplement = _SUPPLEMENTS[idx % len(_SUPPLEMENTS)]
-        candidate  = narration + " " + supplement
+        supplements = _SUPPLEMENTS_FOOD if is_food else _SUPPLEMENTS
+        supplement  = supplements[idx % len(supplements)]
+        candidate   = narration + " " + supplement
         if len(candidate) <= max_chars:
             narration = candidate
 
-    # 초과 시 트림
-    if len(narration) > max_chars:
-        narration = narration[:max_chars - 1].rsplit(" ", 1)[0] + "…"
-
     return narration
+
+
+def _load_json_if_matches(path: Path, expected_len: int):
+    """path가 존재하고 list이며 길이가 expected_len과 같으면 그 값을 반환, 아니면 None."""
+    if not path.exists():
+        return None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    if isinstance(data, list) and len(data) == expected_len:
+        return data
+    return None
+
+
+# captions.json/slide_durations.json은 render.ps1이 순수 JSON 배열로 파싱하므로(.Count 등)
+# 상품명 메타를 그 안에 직접 넣을 수 없다 — 대신 별도 세션 메타 파일로 "이 캐시가 어느
+# 상품 것인지"를 추적하고, 상품명이 바뀌면 캐시 3종(자막/타이밍/나레이션)을 통째로 삭제한다.
+_TTS_SESSION_META_PATH = BASE_DIR / "tts_session_meta.json"
+_TTS_CACHE_FILES = ("captions.json", "slide_durations.json", "output_narration.wav")
+
+
+def _invalidate_stale_tts_cache(product_name: str) -> bool:
+    """세션 메타에 기록된 상품명과 다르면 자막/타이밍/나레이션 캐시 파일을 모두 삭제하고
+    메타를 현재 상품명으로 갱신한다. 반환값: 무효화(삭제)가 실제로 일어났는지 여부."""
+    prev_name = None
+    if _TTS_SESSION_META_PATH.exists():
+        try:
+            prev_name = json.loads(_TTS_SESSION_META_PATH.read_text(encoding="utf-8")).get("productName")
+        except Exception:
+            prev_name = None
+
+    if prev_name == product_name:
+        return False
+
+    for fname in _TTS_CACHE_FILES:
+        fpath = BASE_DIR / fname
+        if fpath.exists():
+            fpath.unlink()
+            print(f"[세션] 상품 전환 감지({prev_name!r} → {product_name!r}) → {fname} 삭제", flush=True)
+
+    _TTS_SESSION_META_PATH.write_text(
+        json.dumps({"productName": product_name}, ensure_ascii=False), encoding="utf-8")
+    return True
 
 
 def handle_generate_srt(body: bytes) -> bytes:
     payload      = json.loads(body)
     slides       = payload.get("slides", [])
     product_name = payload.get("productName", "")
+    category     = payload.get("category", "")
 
-    n_slides     = min(len(slides), 10) or 10
+    if _invalidate_stale_tts_cache(product_name):
+        print(f"[SRT] 상품 전환으로 이전 캐시 무효화됨 → {product_name!r} 기준으로 새로 생성", flush=True)
+
+    n_slides     = min(len(slides), SLIDE_TOTAL) or SLIDE_TOTAL
     ms_per_slide, _, _ = _slide_timing(n_slides)
     sec_per_slide = ms_per_slide / 1000.0
-    print(f"[SRT] 슬라이드 {n_slides}장 → 슬라이드당 {sec_per_slide}초", flush=True)
+
+    # TTS가 이미 생성되어 있으면(captions.json/slide_durations.json) 그 결과를 그대로 재사용해
+    # 다운로드되는 .srt가 실제 음성 텍스트·길이와 항상 일치하도록 한다.
+    # 없으면(아직 TTS 생성 전) 화면 타이밍 기준 균등 분배로 잠정 생성한다.
+    cached_captions  = _load_json_if_matches(BASE_DIR / "captions.json", n_slides)
+    cached_durations = _load_json_if_matches(BASE_DIR / "slide_durations.json", n_slides)
+
+    narrations = cached_captions if cached_captions is not None else \
+        _build_narration_list(slides, product_name, n_slides, sec_per_slide, category)
+    slide_sec  = cached_durations if cached_durations is not None else [sec_per_slide] * n_slides
+
+    timing_src = "실제 음성 길이 비례(slide_durations.json)" if cached_durations is not None else "화면 타이밍 균등 분배"
+    text_src   = "TTS 최종 텍스트(captions.json)" if cached_captions is not None else "새로 생성"
+    print(f"[SRT] 슬라이드 {n_slides}장 → 타이밍: {timing_src} / 텍스트: {text_src}", flush=True)
 
     lines = []
-    for i, slide in enumerate(slides[:n_slides]):
-        start     = i * ms_per_slide
-        end       = start + ms_per_slide
-        narration = build_narration(slide, product_name, i, sec_per_slide)
+    cursor_ms = 0.0
+    for i, narration in enumerate(narrations):
+        start = cursor_ms
+        end   = start + slide_sec[i] * 1000.0
+        cursor_ms = end
         lines.append(str(i + 1))
-        lines.append(f"{ms_to_srt_time(start)} --> {ms_to_srt_time(end)}")
-        lines.append(narration)
+        lines.append(f"{ms_to_srt_time(int(round(start)))} --> {ms_to_srt_time(int(round(end)))}")
+        lines.append(_clean_caption_text(narration))  # 괄호/말줄임표 제거 (캐시된 값이어도 안전하게 재적용)
         lines.append("")
+
+    # captions.json이 아직 없을 때만(=TTS 생성 전) 잠정 자막으로 저장.
+    # TTS가 이미 만든 captions.json은 더 정확한 소스이므로 여기서 덮어쓰지 않는다.
+    if cached_captions is None:
+        _write_captions_json(narrations)
 
     return "\n".join(lines).encode("utf-8")
 
@@ -497,17 +673,19 @@ def _get_env(key: str) -> str:
 
 
 # ──────────────────────────────────────────────────────────────
-# /generate-tts 핸들러  (Gemini TTS)
+# /generate-tts 핸들러  (Typecast TTS)
 # ──────────────────────────────────────────────────────────────
 
-# 슬라이드 인덱스별 감정 스타일 프리픽스
-_EMOTION_PREFIX = {
-    0: "(힘있고 강조하며, 잠깐 멈추고) ",   # 후킹 — [emphasis][pause=0.5]
-    3: "(밝고 명랑하게) ",                  # 효능 — [cheerful]
-    7: "(따뜻하고 친근하게) ",              # 상품평 — [warm]
-    8: "(빠르고 긴박하게) ",                # 특가 — [urgent]
-    9: "(힘있고 강조하며) ",                # CTA — [emphasis]
-}
+# Typecast TTS 전체 스크립트에 적용할 감정 프리셋.
+# 주의: Typecast API는 요청 1건(전체 스크립트)당 emotion_preset 1개만 받는다 — 문장별 개별
+# 감정 지정은 지원하지 않는다. 과거에는 "(힘있고 강조하며...)" 같은 한국어 지시문을 본문에
+# 직접 끼워넣어 TTS가 그 지시문 자체를 대사처럼 읽어버리는 버그가 있었음 → 완전히 제거하고
+# 유효한 emotion_preset 값(happy/normal/sad/angry/whisper/toneup/tonedown) 중 하나를
+# prompt 파라미터로 분리 전달한다. 후킹·CTA·특가 등 강조 구간이 많아 toneup을 기본값으로 사용.
+_TTS_EMOTION_PRESET   = "toneup"
+# intensity가 높을수록 엔진이 호흡/감탄사 같은 애드리브성 표현을 더 많이 끼워넣는 경향이 있어
+# (자막에는 없는 "아~" 같은 소리가 음성에만 섞이는 원인) 기본값(1.0)으로 낮춰 자막-음성 불일치를 줄인다.
+_TTS_EMOTION_INTENSITY = 1.0
 
 
 def _adjust_wav_speed(wav_path: Path, target_sec: float) -> tuple:
@@ -540,67 +718,115 @@ def _adjust_wav_speed(wav_path: Path, target_sec: float) -> tuple:
     return wav_path.read_bytes(), actual_sec, ratio
 
 
-def _build_tts_text(slides: list, product_name: str, n_slides: int, sec_per_slide_for_text: float) -> str:
+def _build_narration_list(slides: list, product_name: str, n_slides: int, sec_per_slide_for_text: float,
+                           category: str = "") -> list:
+    """슬라이드별 순수 나레이션 텍스트(감정 프리픽스 없음) 리스트.
+    TTS 본문과 자막(captions.json)이 항상 같은 소스를 쓰도록 이 함수 하나로 통일한다.
+    category는 build_narration()의 식품 전용 어휘("먹다/드시다"류) 분기에 쓰인다."""
+    return [
+        build_narration(slides[i] if i < len(slides) else {}, product_name, i, sec_per_slide_for_text, category)
+        for i in range(n_slides)
+    ]
+
+
+def _build_tts_text(slides: list, product_name: str, n_slides: int, sec_per_slide_for_text: float,
+                     category: str = "") -> str:
     """슬라이드별 나레이션을 빌드해 합친다. sec_per_slide_for_text는 글자 수 산정 전용
-    (화면 표시 길이인 _slide_timing 결과와는 별개 — 재생성 시 대본 길이만 조정하기 위함)."""
-    lines = []
-    for i in range(n_slides):
-        slide     = slides[i] if i < len(slides) else {}
-        narration = build_narration(slide, product_name, i, sec_per_slide_for_text)
-        prefix    = _EMOTION_PREFIX.get(i, "")
-        lines.append(f"{prefix}{narration}")
-    return "\n\n".join(lines)
+    (화면 표시 길이인 _slide_timing 결과와는 별개 — 재생성 시 대본 길이만 조정하기 위함).
+    톤/감정 지시문은 본문에 섞지 않는다 (TTS에 보낼 때는 prompt 파라미터로 별도 전달 — _call_typecast_tts 참고).
+    """
+    narrations = _build_narration_list(slides, product_name, n_slides, sec_per_slide_for_text, category)
+    return "\n\n".join(narrations)
 
 
-def _call_gemini_tts(full_text: str, voice_name: str, api_key: str) -> bytes:
-    """Gemini TTS를 호출해 WAV bytes(PCM 24000Hz/16bit/mono)를 반환."""
-    try:
-        from google import genai
-        from google.genai import types as gtypes
-    except ImportError:
-        raise ImportError("google-genai 패키지가 필요합니다: pip install google-genai")
+def _clean_caption_text(text: str) -> str:
+    """자막(화면 표시) 전용 클린업. 괄호류·말줄임표(트림 마커) 등 '표시 문자'를 제거해
+    깔끔한 문장만 보이도록 한다. TTS로 보내는 원본 텍스트(쉼/포즈 유지)는 건드리지 않는다 —
+    이 함수는 captions.json/SRT를 쓸 때만 적용한다."""
+    cleaned = re.sub(r"[()\[\]{}]", "", text)   # 괄호류는 문자만 제거, 안의 내용은 유지
+    cleaned = cleaned.replace("…", "")           # build_narration의 트림 마커(말줄임표) 제거
+    cleaned = re.sub(r"\s{2,}", " ", cleaned).strip()
+    cleaned = re.sub(r"[,\s]+$", "", cleaned)    # 제거 후 끝에 남은 쉼표·공백 정리
+    return cleaned
 
-    client = genai.Client(api_key=api_key)
-    response = client.models.generate_content(
-        model="gemini-2.5-flash-preview-tts",
-        contents=full_text,
-        config=gtypes.GenerateContentConfig(
-            response_modalities=["AUDIO"],
-            speech_config=gtypes.SpeechConfig(
-                voice_config=gtypes.VoiceConfig(
-                    prebuilt_voice_config=gtypes.PrebuiltVoiceConfig(
-                        voice_name=voice_name
-                    )
-                )
-            )
-        )
+
+def _write_captions_json(narrations: list) -> None:
+    """자막 표시용으로 클린업한 텍스트를 captions.json에 저장한다.
+    (TTS에 실제로 들어간 narrations 원본은 호출부에서 별도로 보존해서 사용한다.)"""
+    clean_narrations = [_clean_caption_text(t) for t in narrations]
+    captions_path = BASE_DIR / "captions.json"
+    captions_path.write_text(json.dumps(clean_narrations, ensure_ascii=False), encoding="utf-8")
+    print(f"[Captions] 저장: {captions_path} ({len(clean_narrations)}개, 괄호/말줄임표 제거됨)", flush=True)
+
+
+def _save_captions(slides: list, product_name: str, n_slides: int, sec_per_slide_for_text: float,
+                    category: str = "") -> None:
+    """슬라이드별 나레이션 텍스트를 captions.json으로 저장 (Remotion 자막 컴포넌트가 읽는 파일).
+    handle_generate_tts가 실제로 사용한 최종 sec_per_slide_for_text로 호출해야
+    음성과 자막 텍스트가 항상 일치한다."""
+    narrations = _build_narration_list(slides, product_name, n_slides, sec_per_slide_for_text, category)
+    _write_captions_json(narrations)
+
+
+def _save_slide_durations(narrations: list, total_sec: float) -> None:
+    """슬라이드별 화면 노출 시간을 '실제 음성 글자수 비례'로 분배해 slide_durations.json에 저장.
+    완전한 단어 단위 타임스탬프는 아니지만, 균등분배보다 실제 발화 길이에 훨씬 가깝다.
+    render.ps1이 이 파일을 읽어 슬라이드별 프레임 수를 다르게 적용한다.
+    """
+    lengths   = [max(len(t), 1) for t in narrations]
+    total_len = sum(lengths)
+    durations_sec = [round(total_sec * (l / total_len), 3) for l in lengths]
+    # 반올림 오차를 마지막 슬라이드에서 보정해 합계가 total_sec과 정확히 일치하도록 함
+    diff = round(total_sec - sum(durations_sec), 3)
+    durations_sec[-1] = round(durations_sec[-1] + diff, 3)
+
+    path = BASE_DIR / "slide_durations.json"
+    path.write_text(json.dumps(durations_sec), encoding="utf-8")
+    print(f"[Captions] 슬라이드별 노출 시간(글자수 비례, 실제 음성 {total_sec:.2f}s 기준): "
+          f"{durations_sec}", flush=True)
+
+
+_TYPECAST_TTS_URL = "https://api.typecast.ai/v1/text-to-speech"
+
+
+def _call_typecast_tts(full_text: str, voice_id: str, api_key: str) -> bytes:
+    """Typecast TTS를 호출해 WAV bytes를 반환.
+    audio_tempo는 항상 1.0로 고정 — 속도 보정은 _adjust_wav_speed(자체 atempo 로직)에서만 수행해
+    "엔진 자체 배속"과 "우리 쪽 동기화 배속"이 이중으로 겹치지 않도록 한다.
+    """
+    req_body = json.dumps({
+        "voice_id": voice_id,
+        "text": full_text,
+        "model": "ssfm-v30",
+        "prompt": {
+            "emotion_type": "preset",
+            "emotion_preset": _TTS_EMOTION_PRESET,
+            "emotion_intensity": _TTS_EMOTION_INTENSITY,
+        },
+        "output": {
+            "audio_format": "wav",
+            "audio_tempo": 1.0,
+        },
+    }).encode("utf-8")
+
+    req = urllib.request.Request(
+        _TYPECAST_TTS_URL,
+        data=req_body,
+        method="POST",
+        headers={
+            "X-API-KEY": api_key,
+            "Content-Type": "application/json",
+        },
     )
-
     try:
-        part     = response.candidates[0].content.parts[0]
-        raw      = part.inline_data.data
-        raw_type = type(raw).__name__
-        raw_len  = len(raw) if raw else 0
-        print(f"[TTS] inline_data.data type={raw_type} len={raw_len}", flush=True)
+        with urllib.request.urlopen(req, timeout=60) as resp:
+            wav_bytes = resp.read()
+    except urllib.error.HTTPError as e:
+        detail = e.read().decode("utf-8", errors="replace")
+        raise RuntimeError(f"[Typecast] API 오류 {e.code}: {detail}")
 
-        if isinstance(raw, bytes):
-            pcm_data = raw                          # 이미 바이너리 PCM
-        else:
-            raw     += "=" * (-len(raw) % 4)       # 패딩 보정
-            pcm_data = base64.b64decode(raw)        # base64 문자열 → PCM
-
-        print(f"[TTS] PCM 크기: {len(pcm_data)} bytes", flush=True)
-    except Exception:
-        traceback.print_exc()
-        raise
-
-    wav_buf = io.BytesIO()
-    with wave.open(wav_buf, "wb") as wf:
-        wf.setnchannels(1)
-        wf.setsampwidth(2)
-        wf.setframerate(24000)
-        wf.writeframes(pcm_data)
-    return wav_buf.getvalue()
+    print(f"[TTS] Typecast 응답 크기: {len(wav_bytes)} bytes", flush=True)
+    return wav_bytes
 
 
 _ATEMPO_SAFE_MIN = 0.85   # 이 범위를 벗어나면 부자연스러운 배속으로 간주
@@ -611,25 +837,34 @@ def handle_generate_tts(body: bytes) -> tuple:
     payload      = json.loads(body)
     slides       = payload.get("slides", [])
     product_name = payload.get("productName", "")
-    voice_name   = payload.get("voiceName", "Kore")
+    category     = payload.get("category", "")
+    voice_id     = payload.get("voiceId") or payload.get("voiceName") or _get_env("TYPECAST_VOICE_ID")
+
+    if _invalidate_stale_tts_cache(product_name):
+        print(f"[TTS] 상품 전환으로 이전 캐시 무효화됨 → {product_name!r} 기준으로 새로 생성", flush=True)
 
     # 슬라이드 수 기반 타이밍 자동 산정 (화면 길이 — 건드리지 않음)
-    n_slides      = min(len(slides), 10) or 10
+    n_slides      = min(len(slides), SLIDE_TOTAL) or SLIDE_TOTAL
     ms_per_slide, tgt_min, tgt_max = _slide_timing(n_slides)
     sec_per_slide = ms_per_slide / 1000.0
     target_sec    = round((tgt_min + tgt_max) / 2.0, 3)   # 목표 나레이션 길이 = 화면 목표 구간의 평균
     print(f"[TTS] 슬라이드 {n_slides}장 → 슬라이드당 {sec_per_slide}초 / 화면 목표 {tgt_min}~{tgt_max}초 / 나레이션 목표 {target_sec}초", flush=True)
 
-    api_key = _get_env("GEMINI_API_KEY")
+    api_key = _get_env("TYPECAST_API_KEY")
     if not api_key:
-        raise ValueError("GEMINI_API_KEY가 설정되지 않았습니다. .env 파일을 확인하세요.")
+        raise ValueError("TYPECAST_API_KEY가 설정되지 않았습니다. .env 파일을 확인하세요.")
+    if not voice_id:
+        raise ValueError(
+            "voice_id가 필요합니다. 요청 body의 voiceId 또는 .env의 TYPECAST_VOICE_ID를 설정하세요 "
+            "(예: tc_xxxxxxxx — 빌트인 보이스 / uc_xxxxxxxx — 커스텀 클론)."
+        )
 
     out_path = BASE_DIR / "output_narration.wav"
 
     # 1차 생성 (글자 수 산정은 화면 슬롯 기준 sec_per_slide 그대로 사용)
     text_sec_per_slide = sec_per_slide
-    full_text = _build_tts_text(slides, product_name, n_slides, text_sec_per_slide)
-    wav_bytes = _call_gemini_tts(full_text, voice_name, api_key)
+    full_text = _build_tts_text(slides, product_name, n_slides, text_sec_per_slide, category)
+    wav_bytes = _call_typecast_tts(full_text, voice_id, api_key)
     out_path.write_bytes(wav_bytes)
     print(f"[TTS] 저장 완료: {out_path} ({len(wav_bytes)//1024}KB)", flush=True)
 
@@ -643,8 +878,8 @@ def handle_generate_tts(body: bytes) -> tuple:
         print(f"[TTS] 배속 범위 초과({pre_ratio:.3f}) → 글자 수 기준 재조정: "
               f"sec_per_slide {sec_per_slide}s → {text_sec_per_slide}s 로 재생성", flush=True)
 
-        full_text = _build_tts_text(slides, product_name, n_slides, text_sec_per_slide)
-        wav_bytes = _call_gemini_tts(full_text, voice_name, api_key)
+        full_text = _build_tts_text(slides, product_name, n_slides, text_sec_per_slide, category)
+        wav_bytes = _call_typecast_tts(full_text, voice_id, api_key)
         out_path.write_bytes(wav_bytes)
         actual_sec = _get_audio_duration(out_path)
         print(f"[TTS] 재생성 길이: {actual_sec:.2f}s / 목표 {target_sec}s (비율 {actual_sec / target_sec:.3f})", flush=True)
@@ -652,6 +887,12 @@ def handle_generate_tts(body: bytes) -> tuple:
     # 최종 미세 조정 (±2% 밖이면 atempo로 보정)
     wav_bytes, actual_sec, _ = _adjust_wav_speed(out_path, target_sec)
     print(f"[TTS] 최종 길이: {actual_sec:.2f}s (목표 {target_sec}s)", flush=True)
+
+    # 자막은 실제로 TTS에 들어간 최종 텍스트(text_sec_per_slide 기준)와 항상 동일하게 저장
+    narrations_final = _build_narration_list(slides, product_name, n_slides, text_sec_per_slide, category)
+    _write_captions_json(narrations_final)
+    # 화면 노출 시간도 균등분배 대신 실제 음성 길이(actual_sec)를 글자수 비례로 분배
+    _save_slide_durations(narrations_final, actual_sec)
 
     return wav_bytes, actual_sec
 
