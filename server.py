@@ -1503,8 +1503,13 @@ import time
 import mimetypes
 
 _OAUTH_SCOPES = [
-    "https://www.googleapis.com/auth/drive.file",
+    # drive.file(제한 스코프)은 앱이 직접 만들었거나 사용자가 Picker로 명시적으로 연 파일만
+    # API로 볼 수 있어, .env에 수동으로 넣은 GOOGLE_DRIVE_FOLDER_ID가 계정 소유여도 404가 났음
+    # (실측: 같은 계정인데 API로 보이는 폴더 0개). 전체 drive 스코프로 넓혀서 해결.
+    "https://www.googleapis.com/auth/drive",
     "https://www.googleapis.com/auth/youtube.upload",
+    "https://www.googleapis.com/auth/youtube.readonly",
+    "https://www.googleapis.com/auth/youtube.force-ssl",  # 고정 댓글 자동 작성(commentThreads.insert)에 필요
 ]
 
 
@@ -1527,10 +1532,13 @@ def _get_oauth_creds():
 
     creds = None
     if token_path.exists():
+        # from_authorized_user_file(path, scopes)는 creds.scopes를 "요청한" scopes로
+        # 덮어써버려서, 파일에 실제 저장된 스코프와 비교하려면 원본 JSON을 따로 읽어야 함.
+        saved_scopes = json.loads(token_path.read_text(encoding="utf-8")).get("scopes") or []
         creds = Credentials.from_authorized_user_file(str(token_path), _OAUTH_SCOPES)
         # 저장된 토큰에 필요한 스코프가 없으면 재인증
-        if creds and creds.scopes and not set(_OAUTH_SCOPES).issubset(creds.scopes):
-            print("[OAuth] 스코프 변경 감지 → 재인증 필요", flush=True)
+        if creds and not set(_OAUTH_SCOPES).issubset(set(saved_scopes)):
+            print(f"[OAuth] 스코프 변경 감지 (저장됨: {saved_scopes}) → 재인증 필요", flush=True)
             creds = None
 
     if not creds or not creds.valid:
@@ -1545,9 +1553,15 @@ def _get_oauth_creds():
                     "Google Cloud Console → OAuth 클라이언트 ID(데스크톱 앱) 생성 후\n"
                     "credentials.json을 서버 폴더에 저장하세요."
                 )
-            print("[OAuth] 브라우저 인증 시작 (Drive + YouTube)...", flush=True)
-            flow  = InstalledAppFlow.from_client_secrets_file(str(creds_path), _OAUTH_SCOPES)
-            creds = flow.run_local_server(port=0, open_browser=True)
+            print("[OAuth] 브라우저 인증 시작 (Drive + YouTube)... (180초 내 미완료 시 자동 취소)", flush=True)
+            flow = InstalledAppFlow.from_client_secrets_file(str(creds_path), _OAUTH_SCOPES)
+            try:
+                creds = flow.run_local_server(port=0, open_browser=True, timeout_seconds=180)
+            except Exception as e:
+                raise TimeoutError(
+                    "OAuth 인증이 180초 내에 완료되지 않아 취소되었습니다. "
+                    "브라우저에서 구글 계정 로그인/동의를 완료한 뒤 다시 시도하세요."
+                ) from e
             print("[OAuth] 인증 완료.", flush=True)
 
         token_path.write_text(creds.to_json(), encoding="utf-8")
