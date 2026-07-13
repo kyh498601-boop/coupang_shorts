@@ -872,7 +872,7 @@ def _render_thumb_a(product_img: Image.Image | None,
 
     좌측 55%: 흰색 배경 + 제품 이미지 크고 선명 (밝기/대비 보정)
     우측 45%: #2E8B57 브랜드 그린 + 대형 흰색 Hook 텍스트 (가운데 정렬)
-    뱃지: 🔥 BEST 추천 (골드, 우측 상단 가운데 정렬)
+    뱃지: 🔥 오늘의 추천 (골드, 우측 상단 가운데 정렬)
     하단: 전체 폭 골드 브랜드 바
     """
     img  = Image.new("RGB", (TW, TH), _TC_WHITE)
@@ -909,7 +909,7 @@ def _render_thumb_a(product_img: Image.Image | None,
     text_w  = TW - tx - MARGIN        # 텍스트 영역 너비
 
     # 뱃지 — 텍스트 영역 좌상단 고정 (좌측 여백 20px, 상단 여백 20px)
-    BADGE_LABEL = "🔥 BEST 추천"
+    BADGE_LABEL = "🔥 오늘의 추천"
     _, bh = _tw_badge(draw, tx + 20, 20, BADGE_LABEL,
                       bg_color=_TC_GOLD, text_color=(20, 60, 20), font_size=28)
 
