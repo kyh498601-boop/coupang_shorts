@@ -33,6 +33,9 @@ from urllib.parse import urlparse, urlencode
 
 from PIL import Image, ImageDraw, ImageEnhance, ImageFilter, ImageFont
 
+import community_post_helper
+from community_post_template import generate_post
+
 # ──────────────────────────────────────────────────────────────
 # 상수
 # ──────────────────────────────────────────────────────────────
@@ -1184,6 +1187,13 @@ def handle_generate_thumbnail(body: bytes) -> bytes:
     return json.dumps(result).encode()
 
 
+def handle_generate_community_post(body: bytes) -> bytes:
+    """템플릿 기반 커뮤니티 게시물 문구 생성 (AI 미사용, community_post_template.py)."""
+    payload = json.loads(body)
+    post = generate_post(payload["title"], payload["url"])
+    return json.dumps({"post": post}, ensure_ascii=False).encode("utf-8")
+
+
 # ──────────────────────────────────────────────────────────────
 # Google OAuth2 공통  (Drive + YouTube 통합 인증)
 #
@@ -1430,6 +1440,11 @@ def handle_upload_youtube(body: bytes) -> bytes:
       tags              list  태그 목록
       privacyStatus     str   "private" | "unlisted" | "public"
       thumbnailVariant  str   "a" | "b" | null  — 선택한 썸네일 자동 업로드
+      pinnedComment     str   업로드 직후 자동으로 남길 댓글 (Linktree 등 클릭 가능한 링크용).
+                              YouTube Shorts는 설명란 URL을 자동 링크화하지 않지만 댓글은 링크화하므로,
+                              설명란 대신 댓글로 안내하면 실제로 클릭 가능하다.
+                              단, "고정(핀)"은 YouTube Data API가 지원하지 않아 댓글 작성까지만 자동화되고
+                              핀 고정은 YouTube Studio에서 수동으로 해야 한다.
     """
     try:
         from googleapiclient.http import MediaFileUpload
@@ -1442,6 +1457,7 @@ def handle_upload_youtube(body: bytes) -> bytes:
     tags              = payload.get("tags") or []
     privacy           = payload.get("privacyStatus", "private")
     thumb_variant     = payload.get("thumbnailVariant")  # "a" | "b" | None
+    pinned_comment    = (payload.get("pinnedComment") or "").strip()[:10000]
 
     mp4_path = BASE_DIR / "output_with_bgm.mp4"
     if not mp4_path.exists():
@@ -1505,9 +1521,48 @@ def handle_upload_youtube(body: bytes) -> bytes:
                 else:
                     print(f"[YouTube] 썸네일 파일 없음: {thumb_path}", flush=True)
 
+            # 고정 댓글 자동 작성 (Linktree 링크 등 — 설명란과 달리 댓글은 클릭 가능한 링크로 표시됨)
+            comment_posted = False
+            if pinned_comment:
+                try:
+                    print(f"[YouTube] 댓글 작성 중... ({len(pinned_comment)}자)", flush=True)
+                    youtube.commentThreads().insert(
+                        part="snippet",
+                        body={
+                            "snippet": {
+                                "videoId": video_id,
+                                "topLevelComment": {
+                                    "snippet": {"textOriginal": pinned_comment}
+                                },
+                            }
+                        },
+                    ).execute()
+                    comment_posted = True
+                    print("[YouTube] 댓글 작성 완료 (핀 고정은 YouTube Studio에서 수동으로 해주세요)", flush=True)
+                except Exception as ce:
+                    print(f"[YouTube] 댓글 작성 실패 (영상은 정상): {ce}", flush=True)
+
+            # 커뮤니티 게시물 문구 생성 + 텔레그램 알림.
+            # /upload-youtube 요청에는 productName이 별도로 오지 않으므로(대시보드가 안 보냄)
+            # title을 그대로 상품명 대신 사용한다. 실패해도 업로드 자체는 이미 성공했으니 무시.
+            try:
+                notify_thumb_path = (
+                    thumb_path if thumb_variant in ("a", "b") and thumb_path.exists()
+                    else BASE_DIR / "thumbnail_test_a.png"
+                )
+                community_post_helper.handle_community_post_for_upload(
+                    video_title=title,
+                    video_url=url,
+                    product_name=title,
+                    thumbnail_path=str(notify_thumb_path),
+                )
+            except Exception:
+                print(f"[community_post] 알림 단계 실패 (업로드 자체는 성공): {traceback.format_exc()}", flush=True)
+
             return json.dumps(
                 {"ok": True, "videoId": video_id, "url": url,
-                 "thumbnailUploaded": thumb_uploaded, "thumbnailVariant": thumb_variant},
+                 "thumbnailUploaded": thumb_uploaded, "thumbnailVariant": thumb_variant,
+                 "commentPosted": comment_posted},
                 ensure_ascii=False
             ).encode()
 
@@ -1608,6 +1663,9 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(200, "application/json", result_json)
             elif path == "/upload-youtube":
                 result_json = handle_upload_youtube(body)
+                self._send(200, "application/json", result_json)
+            elif path == "/generate-community-post":
+                result_json = handle_generate_community_post(body)
                 self._send(200, "application/json", result_json)
             else:
                 self._send(404, "text/plain", b"Not Found")
