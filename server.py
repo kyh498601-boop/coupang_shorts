@@ -17,12 +17,14 @@ POST /generate-png  -> JSON {slides, images(base64[]), productName, category}
 """
 
 import base64
+import datetime
 import io
 import json
 import math
 import os
 import random
 import re
+import shutil
 import subprocess
 import traceback
 import urllib.error
@@ -37,6 +39,7 @@ from PIL import Image, ImageDraw, ImageEnhance, ImageFilter, ImageFont
 
 import community_post_helper
 from community_post_template import generate_post
+import coupang_collector
 
 # ──────────────────────────────────────────────────────────────
 # 상수
@@ -1681,12 +1684,352 @@ def handle_render_status() -> bytes:
     """GET /render-status — 현재 렌더링 상태와 누적 로그 반환."""
     with _render_lock:
         snap = {
-            "running":  _render_state["running"],
-            "done":     _render_state["done"],
-            "exitCode": _render_state["exitCode"],
-            "log":      list(_render_state["log"]),
+            "running":    _render_state["running"],
+            "done":       _render_state["done"],
+            "exitCode":   _render_state["exitCode"],
+            "log":        list(_render_state["log"]),
+            "finishedAt": _render_state.get("finishedAt"),
         }
     return json.dumps(snap, ensure_ascii=False).encode()
+
+
+# ──────────────────────────────────────────────────────────────
+# STEP0 — 쿠팡 URL 자동 수집
+#   ※ 가격/할인율 수치는 절대 응답에 포함하지 않는다 (coupang_collector.py 참고)
+# ──────────────────────────────────────────────────────────────
+
+def handle_collect_products(body: bytes) -> bytes:
+    """POST /collect-products  { "urls": ["https://...", ...] }
+    URL별로 상품명/평점/리뷰수/카테고리 추정/썸네일(1장)을 스크래핑해 반환.
+    전체 이미지는 다운로드하지 않고 URL만 넘겨 선택 확정(/confirm-selection) 시에만 내려받는다.
+    """
+    payload = json.loads(body) if body else {}
+    urls = [u.strip() for u in payload.get("urls", []) if isinstance(u, str) and u.strip()]
+    urls = list(dict.fromkeys(urls))[:10]  # 중복 제거 + 최대 10개
+
+    if not urls:
+        return json.dumps({"products": [], "errors": [{"url": "", "message": "URL을 입력해주세요."}]},
+                           ensure_ascii=False).encode()
+
+    products, errors = [], []
+    for url in urls:
+        print(f"[STEP0 수집] {url}", flush=True)
+        item = coupang_collector.collect_product(url)
+        if item.error or not item.name:
+            errors.append({"url": url, "message": item.error or "상품 정보를 찾을 수 없습니다."})
+            continue
+
+        thumb = coupang_collector.download_image_b64(item.image_urls[0]) if item.image_urls else None
+        products.append({
+            "sourceUrl":    item.source_url,
+            "pageKey":      item.page_key,
+            "name":         item.name,
+            "rating":       item.rating,
+            "reviewCount":  item.review_count,
+            "category":     item.category,
+            "thumbnail":    thumb,
+            "imageUrls":    item.image_urls,
+        })
+        print(f"  → {item.name!r}  이미지 {len(item.image_urls)}개  카테고리 추정={item.category}", flush=True)
+
+    return json.dumps({"products": products, "errors": errors}, ensure_ascii=False).encode()
+
+
+def handle_confirm_selection(body: bytes) -> bytes:
+    """POST /confirm-selection  { "name", "category", "imageUrls": [...] }
+    선택 확정된 상품 1건의 이미지(최대 10장)를 실제로 다운로드해 base64로 반환.
+    STEP1의 제품명/이미지 자동 채움에 사용된다 (가격/할인율은 다루지 않음).
+    """
+    payload    = json.loads(body) if body else {}
+    name       = (payload.get("name") or "").strip()
+    category   = payload.get("category") or "기타"
+    image_urls = [u for u in payload.get("imageUrls", []) if isinstance(u, str)][:10]
+
+    images = []
+    for url in image_urls:
+        b64 = coupang_collector.download_image_b64(url)
+        if b64:
+            images.append(b64)
+
+    print(f"[STEP0 확정] {name!r}  이미지 {len(images)}/{len(image_urls)}개 다운로드 완료", flush=True)
+    return json.dumps({"name": name, "category": category, "images": images}, ensure_ascii=False).encode()
+
+
+# ──────────────────────────────────────────────────────────────
+# STEP2 — 카피 생성 요청 큐 (비동기, Claude Code 세션이 직접 처리)
+#
+# 이 서버는 카피를 생성하지 않는다. /request-copy 는 제품명·카테고리·
+# 제품 이미지·상품평 캡처를 public/pending/{requestId}.json + 이미지 파일로
+# 저장할 뿐이다. 실제 카피 작성(제품 이미지 특징 파악, 상품평 캡처 내용
+# 반영, 카테고리별 슬롯 구성에 맞춰 슬라이드 1~7 작성)은 Claude Code
+# 세션이 이 파일을 열어서 수행하고, 결과를 public/completed/{requestId}.json
+# 으로 저장한다 — 슬롯 구성 규칙은 category-copy-rules 스킬 참고.
+#
+# completed JSON 스키마 (Claude Code 세션이 작성):
+#   { "requestId": "...", "slides": [ {"headline": "...", "body": "..."}, ... 7개 ] }
+#
+# 대시보드는 /copy-status?requestId=... 를 폴링해 완료 여부를 확인한다.
+# 트리거는 수동 — pending 파일이 생겼다고 서버가 자동으로 뭔가를 실행하지
+# 않는다(사용자가 Claude Code 세션에 처리를 요청해야 함).
+# ──────────────────────────────────────────────────────────────
+import uuid as _uuid
+
+PENDING_DIR   = BASE_DIR / "public" / "pending"
+COMPLETED_DIR = BASE_DIR / "public" / "completed"
+
+
+def handle_request_copy(body: bytes) -> bytes:
+    """POST /request-copy
+    { productName, partnerLink, category, productImages: base64[], reviewImages: base64[] }
+
+    productName/category/productImages 가 비어있으면 저장하지 않고 에러를 반환한다.
+    (재발 버그: 카테고리 불일치·상품평 미반영 카피가 조용히 생성되던 문제 방지 —
+    입력이 불충분하면 예시 문구로 조용히 대체하지 않고 막는다.)
+    reviewImages는 STEP1에서 선택 입력이라 비어있을 수 있다 — 비어있으면 그대로
+    빈 배열로 저장해, Claude Code 세션이 실제 리뷰 인용을 지어내지 않도록 한다.
+    """
+    payload      = json.loads(body) if body else {}
+    product_name = (payload.get("productName") or "").strip()
+    category     = (payload.get("category") or "").strip()
+    partner_link = (payload.get("partnerLink") or "").strip()
+    product_imgs_b64 = [b for b in payload.get("productImages", []) if isinstance(b, str) and b.strip()]
+    review_imgs_b64  = [b for b in payload.get("reviewImages", [])  if isinstance(b, str) and b.strip()]
+
+    errors = []
+    if not product_name:
+        errors.append("제품명을 입력해주세요.")
+    if not category:
+        errors.append("카테고리를 선택해주세요.")
+    if not product_imgs_b64:
+        errors.append("제품 이미지를 최소 1장 업로드해주세요.")
+    if errors:
+        return json.dumps({"ok": False, "errors": errors}, ensure_ascii=False).encode()
+
+    request_id = f"{time.strftime('%Y%m%d_%H%M%S')}_{_uuid.uuid4().hex[:8]}"
+    req_img_dir = PENDING_DIR / request_id
+    req_img_dir.mkdir(parents=True, exist_ok=True)
+
+    def _save_images(items: list[str], prefix: str) -> list[str]:
+        paths = []
+        for i, b64 in enumerate(items):
+            img = b64_to_pil(b64)
+            if img is None:
+                continue
+            fp = req_img_dir / f"{prefix}_{i+1}.png"
+            img.convert("RGB").save(fp, format="PNG")
+            paths.append(str(fp))
+        return paths
+
+    product_paths = _save_images(product_imgs_b64, "product")
+    review_paths  = _save_images(review_imgs_b64,  "review")
+
+    if not product_paths:
+        shutil.rmtree(req_img_dir, ignore_errors=True)  # 빈 폴더 잔여 방지
+        return json.dumps({"ok": False, "errors": ["제품 이미지 저장에 실패했습니다. 다시 업로드해주세요."]},
+                           ensure_ascii=False).encode()
+
+    PENDING_DIR.mkdir(parents=True, exist_ok=True)
+    pending_payload = {
+        "requestId":     request_id,
+        "createdAt":     datetime.datetime.now().isoformat(timespec="seconds"),
+        "productName":   product_name,
+        "partnerLink":   partner_link,
+        "category":      category,
+        "productImages": product_paths,
+        "reviewImages":  review_paths,
+    }
+    (PENDING_DIR / f"{request_id}.json").write_text(
+        json.dumps(pending_payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    print(f"[카피생성요청] {request_id} 저장됨 — product={product_name!r} category={category!r} "
+          f"productImgs={len(product_paths)} reviewImgs={len(review_paths)}", flush=True)
+
+    # 2026-07-09: pending 저장 직후 헤드리스 Claude Code 호출을 백그라운드로 바로 띄운다.
+    # 실패해도(claude CLI 없음/타임아웃/completed 파일 미생성) 사람이 "pending 처리해줘"라고
+    # 수동으로 요청하는 기존 경로는 그대로 유효하다 — pending 파일을 지우지 않기 때문.
+    t = _threading.Thread(target=_run_headless_copy_worker, args=(request_id,), daemon=True)
+    t.start()
+
+    return json.dumps({"ok": True, "requestId": request_id}, ensure_ascii=False).encode()
+
+
+# ── 헤드리스 자동 트리거 ──────────────────────────────────────────
+#
+# 전제: ANTHROPIC_API_KEY가 환경변수/코드 어디에도 없다는 걸 확인하고(2026-07-09
+# 조사) 이 자동화를 붙인다 — claude 헤드리스 실행(-p)은 이 키가 있으면 그걸
+# 우선 사용해 API 종량제로 청구될 수 있다. 나중에 ANTHROPIC_API_KEY를 코드/환경
+# 어디에든 추가하게 되면, 이 자동화 경로(구독 사용량으로 처리된다는 전제)부터
+# 다시 점검해야 한다 — community_post_helper.py의 ANTHROPIC_API_KEY 사용처럼
+# .env에만 추가해도 이 서버 프로세스의 os.environ에 노출되면 subprocess가 그대로
+# 상속한다.
+CLAUDE_CLI_TIMEOUT_SEC = 300  # claude -p는 내장 타임아웃이 없어 여기서 강제 종료한다.
+
+_copy_jobs_lock = _threading.Lock()
+_copy_jobs: dict = {}  # requestId -> {"status": "processing"|"failed", "startedAt": float, "error": str|None, "proc": Popen|None}
+
+
+def _resolve_claude_cli_path() -> str | None:
+    """claude CLI 실행파일의 절대경로를 찾는다 (shell=True 없이 바로 실행 가능한 .exe만 반환).
+
+    주의(2026-07-09 조사): Claude 데스크톱 앱(Windows, MSIX 패키지)이 띄운 프로세스에서는
+    Windows AppContainer의 AppData 가상화 때문에 %APPDATA% 접근이 그 앱 패키지 전용 격리
+    폴더로 조용히 리다이렉트된다. 이 함수는 사용자가 실제 셸(cmd.exe/PowerShell)에서 직접
+    `python server.py`를 실행하는 정상 배포 상황을 전제로 한다 — 그 경우엔 리다이렉트가
+    적용되지 않아 아래 경로가 실제 npm 전역 설치 위치를 정확히 가리킨다. (Claude Code 세션의
+    Bash/PowerShell 도구로 이 경로를 검증하면 격리된 가짜 사본을 볼 수 있으니, 실제 동작
+    확인은 항상 사용자의 실제 터미널에서 해야 한다.)
+    """
+    which_path = shutil.which("claude")
+    if which_path:
+        npm_bin = Path(which_path).parent / "node_modules" / "@anthropic-ai" / "claude-code" / "bin" / "claude.exe"
+        if npm_bin.exists():
+            return str(npm_bin)
+
+    appdata = os.environ.get("APPDATA")
+    if appdata:
+        fallback = Path(appdata) / "npm" / "node_modules" / "@anthropic-ai" / "claude-code" / "bin" / "claude.exe"
+        if fallback.exists():
+            return str(fallback)
+
+    return None
+
+
+def _run_headless_copy_worker(request_id: str) -> None:
+    """pending/{requestId}.json을 claude -p 헤드리스 호출로 자동 처리한다.
+
+    render.ps1을 돌리는 _run_render_worker와 동일한 백그라운드 스레드 + Popen 패턴.
+    완료 판정은 claude 프로세스의 종료 코드가 아니라 completed/{requestId}.json 파일이
+    실제로 생겼는지로 한다 — 헤드리스 호출이 "성공"으로 끝나도 지시를 안 따르고 파일을
+    안 만들 가능성을 배제하지 않기 위함.
+    """
+    with _copy_jobs_lock:
+        _copy_jobs[request_id] = {"status": "processing", "startedAt": time.time(), "error": None, "proc": None}
+
+    pending_fp = PENDING_DIR / f"{request_id}.json"
+    if not pending_fp.exists():
+        with _copy_jobs_lock:
+            _copy_jobs[request_id] = {"status": "failed", "startedAt": time.time(), "error": "pending 파일이 이미 삭제됨(취소됨)."}
+        return
+
+    claude_path = _resolve_claude_cli_path()
+    if not claude_path:
+        with _copy_jobs_lock:
+            _copy_jobs[request_id] = {
+                "status": "failed", "startedAt": time.time(),
+                "error": "claude CLI를 찾을 수 없습니다. 'npm install -g @anthropic-ai/claude-code' 설치와 "
+                         "PATH 등록을 확인하거나, 수동으로 \"pending 요청 처리해줘\"라고 요청하세요.",
+            }
+        print(f"[헤드리스 카피생성] {request_id} 실패 — claude CLI 경로를 찾을 수 없음", flush=True)
+        return
+
+    completed_fp = COMPLETED_DIR / f"{request_id}.json"
+    prompt = (
+        f"public/pending/{request_id}.json 요청을 처리해줘. category-copy-rules 스킬의 "
+        f"\"비동기 카피 생성 요청 처리\" 절차를 그대로 따라서 제품 이미지와 상품평 캡처를 "
+        f"직접 읽고 실제 카피를 작성한 뒤, public/completed/{request_id}.json 에 그 스킬에 "
+        f"문서화된 스키마 그대로 저장해. 다른 걸 묻지 말고 바로 처리하고 끝내."
+    )
+    cmd = [
+        claude_path, "-p", prompt,
+        "--allowedTools", "Read,Write",
+        "--permission-mode", "dontAsk",
+        "--output-format", "json",
+    ]
+
+    print(f"[헤드리스 카피생성] {request_id} 시작 — {claude_path}", flush=True)
+    try:
+        proc = subprocess.Popen(
+            cmd, cwd=str(BASE_DIR),
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            text=True, encoding="utf-8", errors="replace",
+        )
+        with _copy_jobs_lock:
+            if request_id in _copy_jobs:
+                _copy_jobs[request_id]["proc"] = proc
+
+        try:
+            stdout, _ = proc.communicate(timeout=CLAUDE_CLI_TIMEOUT_SEC)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.communicate()
+            with _copy_jobs_lock:
+                _copy_jobs[request_id] = {
+                    "status": "failed", "startedAt": _copy_jobs.get(request_id, {}).get("startedAt", time.time()),
+                    "error": f"{CLAUDE_CLI_TIMEOUT_SEC}초 타임아웃 — 자동 처리가 끝나지 않아 강제 종료했습니다. "
+                             f"수동으로 \"pending 요청 처리해줘\"라고 요청하세요.",
+                }
+            print(f"[헤드리스 카피생성] {request_id} 타임아웃 — 프로세스 강제 종료", flush=True)
+            return
+
+        if completed_fp.exists():
+            with _copy_jobs_lock:
+                _copy_jobs.pop(request_id, None)  # completed 파일이 상태의 근거이므로 job 기록은 정리만
+            print(f"[헤드리스 카피생성] {request_id} 완료 (exit={proc.returncode})", flush=True)
+            return
+
+        snippet = (stdout or "").strip()[-2000:]
+        with _copy_jobs_lock:
+            _copy_jobs[request_id] = {
+                "status": "failed", "startedAt": _copy_jobs.get(request_id, {}).get("startedAt", time.time()),
+                "error": f"자동 처리가 completed 파일을 만들지 못했습니다 (exit={proc.returncode}). "
+                         f"수동으로 \"pending 요청 처리해줘\"라고 요청하세요. 출력 일부: {snippet}",
+            }
+        print(f"[헤드리스 카피생성] {request_id} 실패 — completed 파일 없음 (exit={proc.returncode})\n{snippet}", flush=True)
+    except Exception as e:
+        with _copy_jobs_lock:
+            _copy_jobs[request_id] = {"status": "failed", "startedAt": time.time(), "error": str(e)}
+        print(f"[헤드리스 카피생성] {request_id} 예외: {e}", flush=True)
+
+
+def handle_copy_status(request_id: str) -> bytes:
+    """GET /copy-status?requestId=xxx — pending(대기)/processing(자동처리중)/done(완료)/failed(실패) 반환."""
+    if not request_id:
+        return json.dumps({"status": "error", "message": "requestId가 없습니다."}, ensure_ascii=False).encode()
+
+    completed_fp = COMPLETED_DIR / f"{request_id}.json"
+    if completed_fp.exists():
+        data = json.loads(completed_fp.read_text(encoding="utf-8"))
+        return json.dumps({"status": "done", "data": data}, ensure_ascii=False).encode()
+
+    with _copy_jobs_lock:
+        job = _copy_jobs.get(request_id)
+    if job:
+        if job["status"] == "processing":
+            return json.dumps({"status": "processing", "startedAt": job["startedAt"]}, ensure_ascii=False).encode()
+        if job["status"] == "failed":
+            return json.dumps({"status": "failed", "error": job.get("error") or "알 수 없는 오류"}, ensure_ascii=False).encode()
+
+    pending_fp = PENDING_DIR / f"{request_id}.json"
+    if pending_fp.exists():
+        return json.dumps({"status": "pending"}, ensure_ascii=False).encode()
+
+    return json.dumps({"status": "not_found"}, ensure_ascii=False).encode()
+
+
+def handle_cancel_copy_request(body: bytes) -> bytes:
+    """POST /cancel-copy-request  { requestId } — 대기/처리 중인 요청을 취소.
+    자동 처리가 돌고 있었다면 그 프로세스도 강제 종료한다."""
+    payload    = json.loads(body) if body else {}
+    request_id = (payload.get("requestId") or "").strip()
+    if not request_id:
+        return json.dumps({"ok": False, "error": "requestId가 없습니다."}, ensure_ascii=False).encode()
+
+    with _copy_jobs_lock:
+        job = _copy_jobs.pop(request_id, None)
+    if job and job.get("proc"):
+        try:
+            job["proc"].kill()
+        except Exception:
+            pass
+
+    pending_json = PENDING_DIR / f"{request_id}.json"
+    pending_dir  = PENDING_DIR / request_id
+    if pending_json.exists():
+        pending_json.unlink()
+    if pending_dir.exists():
+        shutil.rmtree(pending_dir, ignore_errors=True)
+
+    return json.dumps({"ok": True}, ensure_ascii=False).encode()
 
 
 def handle_upload_drive(body: bytes) -> bytes:
