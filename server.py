@@ -5,7 +5,7 @@
 GET  /              -> dashboard.html
 GET  /<path>        -> static file
 POST /generate-png  -> JSON {slides, images(base64[]), productName, category}
-                       -> carousel_1080x1350.zip  (PNG x10)
+                       -> carousel_1080x1350.zip  (PNG x7)
 
 [필수 수치 - 절대 변경 금지]
   PNG  : 1080 x 1350
@@ -68,6 +68,13 @@ CARD_ALPHA  = 220
 BLUR_RADIUS = 28
 DPI         = (72, 72)
 
+# 영상 컴포지션(1080x1920, 9:16)이 이 PNG(1080x1350, 4:5)를 objectFit:"cover"로
+# 표시하면서 좌우 각각 약 160px(= W*(1-H/1920)/2)씩 잘려나간다 (ShoppingShorts.tsx
+# KenBurnsSlide). PNG/영상 캔버스 비율은 지침대로 유지하고, 텍스트만 이 크롭선
+# 밖으로 벗어나지 않도록 안전 여백을 둔다. 크롭 경계(160px)에 여유버퍼(약 60px)를
+# 더해 최종 영상에서 텍스트가 프레임 경계에 바짝 붙지 않도록 한다.
+SAFE_MARGIN_X = 220
+
 FONT_REG  = "C:/Windows/Fonts/malgun.ttf"
 FONT_BOLD = "C:/Windows/Fonts/malgunbd.ttf"
 
@@ -123,6 +130,23 @@ def wrap_text(draw: ImageDraw.ImageDraw, text: str, font, max_w: int) -> list[st
 
 def draw_block(draw, text, x, y, font, fill, max_w, line_h, max_lines) -> int:
     lines = wrap_text(draw, text, font, max_w)[:max_lines]
+    for i, line in enumerate(lines):
+        draw.text((x, y + i * line_h), line, font=font, fill=fill)
+    return len(lines)
+
+
+def draw_autofit_block(draw, text, x, y, bold, fill, max_w, line_h, max_lines,
+                       size_max, size_min, step=4) -> int:
+    """max_lines 안에 들어올 때까지 폰트 크기를 줄여가며 그린다 (글자수 초과로
+    뒷부분이 통째로 잘리는 것을 방지 — size_min에서도 넘치면 그때만 max_lines로 자른다)."""
+    size = size_max
+    font = _font(size, bold=bold)
+    lines = wrap_text(draw, text, font, max_w)
+    while len(lines) > max_lines and size > size_min:
+        size -= step
+        font = _font(size, bold=bold)
+        lines = wrap_text(draw, text, font, max_w)
+    lines = lines[:max_lines]
     for i, line in enumerate(lines):
         draw.text((x, y + i * line_h), line, font=font, fill=fill)
     return len(lines)
@@ -271,6 +295,15 @@ def render_slide(idx: int, slide: dict, product_img: Image.Image | None, product
         bg.paste(crop, (0, 0), crop)
 
     # ── 3. 하단 513px: 반투명 흰 카드 (alpha=220) ───────────────
+    # 블러 배경(제품 색상)이 반투명 레이어 밑으로 비쳐 베이지/크림톤으로 보이는 문제 방지:
+    # 카드 영역을 불투명 흰색으로 먼저 마스킹한 뒤, 지침값 alpha=220 레이어를 얹는다
+    # (같은 흰색 위 오버레이라 결과색은 순백 유지, CARD_ALPHA 값 자체는 지침대로 보존).
+    card_base = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+    ImageDraw.Draw(card_base).rounded_rectangle(
+        [0, CARD_Y, W, H], radius=32, fill=(255, 255, 255, 255),
+    )
+    bg = Image.alpha_composite(bg.convert("RGBA"), card_base)
+
     card_layer = Image.new("RGBA", (W, H), (0, 0, 0, 0))
     ImageDraw.Draw(card_layer).rounded_rectangle(
         [0, CARD_Y, W, H], radius=32,
@@ -279,44 +312,45 @@ def render_slide(idx: int, slide: dict, product_img: Image.Image | None, product
     bg = Image.alpha_composite(bg.convert("RGBA"), card_layer)
     draw = ImageDraw.Draw(bg)
 
-    # ── 4. 슬라이드 번호 뱃지 ──────────────────────────────────
-    bx, by = 52, CARD_Y + 36
-    draw.rounded_rectangle([bx, by, bx + 72, by + 36], radius=8, fill=C_BRAND)
-    f_badge = _font(22, bold=True)
-    label   = f"{idx + 1} / 10"
-    lw      = draw.textlength(label, font=f_badge)
-    draw.text((bx + (72 - lw) // 2, by + 7), label, font=f_badge, fill=C_WHITE)
+    # ── 4. 슬라이드 진행 배지("N / 7" 등) 완전 삭제 (2026-07-06) ────
+    # 위치 기준점(bx, by)만 유지 — 아래 헤드라인/본문 레이아웃이 이 좌표를 기준으로 배치된다.
+    bx, by = SAFE_MARGIN_X, CARD_Y + 36
 
-    # ── 5. Headline (bold 54px) ─────────────────────────────────
+    # ── 5. Headline (bold 54px, 넘치면 34px까지 auto-fit 축소) ────
     headline = slide.get("headline") or slide.get("title") or ""
-    draw_block(draw, headline,
-               x=52, y=CARD_Y + 108,
-               font=_font(54, bold=True), fill=C_BRAND_DRK,
-               max_w=W - 104, line_h=66, max_lines=2)
+    n_head_lines = draw_autofit_block(draw, headline,
+               x=SAFE_MARGIN_X, y=CARD_Y + 108, bold=True, fill=C_BRAND_DRK,
+               max_w=W - SAFE_MARGIN_X * 2, line_h=66, max_lines=2,
+               size_max=54, size_min=34)
 
-    # ── 7. Body (36px) ──────────────────────────────────────────
-    body = slide.get("body") or ""
-    draw_block(draw, body,
-               x=52, y=CARD_Y + 200,
-               font=_font(36), fill=C_GRAY_800,
-               max_w=W - 104, line_h=52, max_lines=4)
+    # ── 6. Body 카피 (regular 30px) — 헤드라인 바로 아래 ───────────
+    # 과거엔 Remotion Caption(음성 동기화 자막)과 중복 표시된다는 이유로 이 블록을 통째로
+    # 삭제했었는데, 실제로는 두 시스템이 서로 다른 산출물(PNG 캐러셀 vs 영상)이라 화면에서
+    # 동시에 보일 일이 없어 body가 항상 빈 채로 나가는 회귀만 남았다 — 다시 그린다.
+    body = (slide.get("body") or "").strip()
+    if body:
+        body_y = CARD_Y + 108 + n_head_lines * 66 + 14
+        draw_block(draw, body,
+                   x=SAFE_MARGIN_X, y=body_y,
+                   font=_font(30), fill=C_GRAY_800,
+                   max_w=W - SAFE_MARGIN_X * 2, line_h=40, max_lines=3)
 
     # ── 8. 제품명 서브텍스트 (30px) ─────────────────────────────
     pname = product_name or "제품명"
     if len(pname) > 22:
         pname = pname[:22] + "…"
-    draw.text((52, CARD_Y + CARD_H - 80), pname, font=_font(30), fill=C_GRAY_600)
+    draw.text((SAFE_MARGIN_X, CARD_Y + CARD_H - 80), pname, font=_font(30), fill=C_GRAY_600)
 
     # ── 9. 워터마크 (bold 26px, 우측) ───────────────────────────
     f_wm = _font(26, bold=True)
     wm   = "생활꿀템연구소"
     wm_w = draw.textlength(wm, font=f_wm)
-    draw.text((W - 52 - wm_w, CARD_Y + CARD_H - 80), wm, font=f_wm,
+    draw.text((W - SAFE_MARGIN_X - wm_w, CARD_Y + CARD_H - 80), wm, font=f_wm,
               fill=(46, 139, 87, 191))   # rgba(46,139,87,0.75)
 
     # ── 10. 하단 진행바 (4px) ───────────────────────────────────
     draw.rectangle([0, H - 4, W, H], fill=(224, 224, 224))
-    draw.rectangle([0, H - 4, int(W * (idx + 1) / 10), H], fill=C_BRAND)
+    draw.rectangle([0, H - 4, int(W * (idx + 1) / SLIDE_TOTAL), H], fill=C_BRAND)
 
     # ── 11. PNG bytes ────────────────────────────────────────────
     img = bg.convert("RGB")
@@ -334,6 +368,7 @@ def handle_generate_png(body: bytes) -> bytes:
     slides       = payload.get("slides", [])
     images_b64   = payload.get("images", [])
     product_name = payload.get("productName", "")
+    ab_headline  = (payload.get("abHeadline") or "").strip()
 
     # base64 -> PIL
     pil_images = [img for img in (b64_to_pil(b) for b in images_b64) if img]
@@ -345,13 +380,29 @@ def handle_generate_png(body: bytes) -> bytes:
         print(f"[PNG] 원본 제품 이미지 저장: {orig_path}", flush=True)
 
     if not slides:
-        slides = [{"title": f"슬라이드 {i+1}", "headline": "", "body": ""} for i in range(10)]
+        slides = [{"title": f"슬라이드 {i+1}", "headline": "", "body": ""} for i in range(SLIDE_TOTAL)]
+
+    # 2026-07-06 버그 수정: STEP3 "썸네일 카피 A/B 선택"에서 고른 문구가 실제 PNG 1번
+    # 슬라이드(히어로)에 전혀 반영되지 않던 문제 — abChoice가 요청에 아예 실려오지
+    # 않았고, 실려왔어도 이 핸들러가 읽지 않아 slides[0]의 SLIDE_COPY 기본 헤드라인만
+    # 항상 쓰였다. abHeadline이 오면 1번 슬라이드 헤드라인을 그 값으로 덮어쓴다.
+    if ab_headline and slides:
+        slides = [dict(slides[0], headline=ab_headline)] + list(slides[1:])
+        print(f"[PNG] 1번 슬라이드 헤드라인을 A/B 선택 문구로 교체: {ab_headline!r}", flush=True)
+
+    input_dir = BASE_DIR / "public" / "input"
+    input_dir.mkdir(parents=True, exist_ok=True)
+    for f in input_dir.glob("slide_*.png"):
+        f.unlink()
 
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
-        for i, slide in enumerate(slides[:10]):
+        for i, slide in enumerate(slides[:SLIDE_TOTAL]):
             img = pil_images[i % len(pil_images)] if pil_images else None
-            zf.writestr(f"slide_{i+1:02d}.png", render_slide(i, slide, img, product_name))
+            png_bytes = render_slide(i, slide, img, product_name)
+            name = f"slide_{i+1:02d}.png"
+            zf.writestr(name, png_bytes)
+            (input_dir / name).write_bytes(png_bytes)
 
     return buf.getvalue()
 
