@@ -173,7 +173,14 @@ def _render_slide_hero(slide: dict, product_img: Image.Image | None, product_nam
     # 범위에 여유버퍼를 더한 값). 헤드라인/제품명/워터마크 전부 이 범위 안에 배치한다.
     # (idx≥1 슬라이드는 영상 재생 중간 프레임이라 이 그리드 크롭과 무관 — render_slide 참고)
     GRID_SAFE_TOP    = 280
-    GRID_SAFE_BOTTOM = 1100
+    # 2026-07-14 2차 진단: Caption autofit(최대 2줄) 도입 후에도, KenBurnsSlide가 배경
+    # 전체(이 PNG에 구운 텍스트 포함)에 scale(1.05~1.18) 확대를 적용하기 때문에 화면
+    # 중심(y=960)보다 아래에 있는 제품명이 줌인될수록 아래로(자막 쪽으로) 더 밀려나는
+    # 문제가 있었다. 실제 remotion의 interpolate/Easing을 그대로 써서 4개 Ken Burns
+    # 패턴 × 전체 프레임을 전수 스캔한 결과, 최악값(패턴2 대각선, t=1, scale=1.18)
+    # 기준 자막 3줄 폴백(최소폰트 34px) 상단과 70px 이상 마진을 두려면 990 이하가 필요
+    # — 990으로 설정(마진 약 81px). 1100→1060(1차)→990(2차)로 두 번째 조정.
+    GRID_SAFE_BOTTOM = 990
 
     # Hook 텍스트 — 상단부, 카드 없이 사진 위에 대형 외곽선 텍스트로 직접 배치 (최대 2줄)
     headline   = slide.get("headline") or slide.get("title") or product_name or "오늘의 생활꿀템"
@@ -229,12 +236,17 @@ def render_slide(idx: int, slide: dict, product_img: Image.Image | None, product
 
     # idx≥1은 영상 재생 중간 프레임이라 그리드 정지썸네일 크롭과는 무관하지만(그리드
     # 크롭은 첫 프레임=히어로만 해당), 대신 Remotion의 자막(Caption, ShoppingShorts.tsx
-    # bottom:150)과 겹치지 않아야 한다. PNG(1080x1350, 4:5)가 영상(1080x1920, 9:16)에
-    # object-fit:cover로 들어갈 때 스케일 1920/1350≈1.4222가 곱해지므로, 자막 블록이
-    # 차지하는 영상 좌표 y≈1654~1770을 PNG 좌표로 역산하면 대략 1135 이하여야 안전하다
-    # — 히어로의 GRID_SAFE_BOTTOM(1100)과 동일한 값을 써서 자막 구간을 피한다.
+    # bottom:150)과 겹치지 않아야 한다.
+    # 2026-07-14 1차 진단: 자막이 배속 보정으로 길어지면 3줄까지 넘어가는 경우가 있어(표준
+    # 7장 흐름에서도 흔함), Caption에 autofit(최대 2줄, 44px→34px)을 추가하고 1100→1060으로
+    # 낮췄다. 2차 진단: 그것만으로는 부족했다 — KenBurnsSlide가 이 PNG 전체(구운 텍스트
+    # 포함)에 scale(1.05~1.18)을 프레임마다 적용해서, 화면 중심(960)보다 아래인 제품명이
+    # 줌인될수록 더 아래로(자막 쪽으로) 밀려나는 별개의 문제가 있었다. 실제 remotion
+    # interpolate/Easing으로 4개 패턴×전체 프레임을 전수 스캔해 최악값(패턴2 대각선,
+    # t=1, scale=1.18, panY=1.5%)을 구했고, 자막 3줄 폴백(34px) 상단과 70px+ 마진을
+    # 두려면 970 이하가 필요 — 970으로 설정(마진 약 86px). 1100→1060→970 두 번째 조정.
     TOP_TEXT_Y    = 260
-    BOTTOM_TEXT_Y = 1100
+    BOTTOM_TEXT_Y = 970
     text_x        = SAFE_MARGIN_X
     text_w        = W - SAFE_MARGIN_X * 2
 

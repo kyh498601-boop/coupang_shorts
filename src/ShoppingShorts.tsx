@@ -198,7 +198,57 @@ function splitCaptionTokens(text: string): { text: string; highlight: boolean }[
   return tokens;
 }
 
+// 자막 박스 폭(AbsoluteFill left/right:32 기준) 및 autofit 폰트 범위.
+// server.py의 _tw_auto_font와 동일 패턴 — 캔버스로 실측해 최대 2줄 안에 들어올 때까지
+// 폰트를 44px→34px로 축소한다. PNG 쪽 제품명(BOTTOM_TEXT_Y=1060)과의 버퍼를 지키기 위함
+// (2026-07-14 진단: 나레이션이 배속 보정으로 길어지면 44px 고정 자막이 3줄까지 넘어가
+// PNG에 구운 제품명 텍스트와 겹치는 버그가 있었다).
+const CAPTION_BOX_WIDTH = 1080 - 32 * 2 - 8; // 좌우 32px 마진 + 외곽선(stroke) 여유버퍼 8px
+const CAPTION_FONT_MAX = 44;
+const CAPTION_FONT_MIN = 34;
+const CAPTION_MAX_LINES = 2;
+
+let _measureCtx: CanvasRenderingContext2D | null = null;
+function getMeasureCtx(): CanvasRenderingContext2D {
+  if (!_measureCtx) {
+    _measureCtx = document.createElement("canvas").getContext("2d")!;
+  }
+  return _measureCtx;
+}
+
+// 단어 단위 줄바꿈 실측 (server.py _tw_wrap과 동일 패턴)
+function wrapByWidth(ctx: CanvasRenderingContext2D, text: string, fontPx: number, maxWidth: number): string[] {
+  ctx.font = `800 ${fontPx}px ${fontFamily}`;
+  const words = text.split(" ");
+  const lines: string[] = [];
+  let line = "";
+  for (const w of words) {
+    const test = line ? `${line} ${w}` : w;
+    if (ctx.measureText(test).width <= maxWidth) {
+      line = test;
+    } else {
+      if (line) lines.push(line);
+      line = w;
+    }
+  }
+  if (line) lines.push(line);
+  return lines.length ? lines : [text];
+}
+
+// 텍스트 길이에 맞는 자막 폰트 크기 결정. size_max→size_min 순으로 줄여가며
+// CAPTION_MAX_LINES(2줄) 이내로 들어오는 크기를 찾고, 최소 크기로도 안 들어오면
+// (텍스트를 자르지 않고 — TTS/자막 1:1 원칙 유지) 최소 크기 그대로 3줄 이상 허용한다.
+function autofitCaptionFontSize(text: string): number {
+  const ctx = getMeasureCtx();
+  for (let size = CAPTION_FONT_MAX; size >= CAPTION_FONT_MIN; size -= 2) {
+    const lines = wrapByWidth(ctx, text, size, CAPTION_BOX_WIDTH);
+    if (lines.length <= CAPTION_MAX_LINES) return size;
+  }
+  return CAPTION_FONT_MIN;
+}
+
 const Caption: React.FC<{ text: string }> = ({ text }) => {
+  const fontSize = React.useMemo(() => autofitCaptionFontSize(text || ""), [text]);
   if (!text) return null;
   const tokens = splitCaptionTokens(text);
 
@@ -218,7 +268,7 @@ const Caption: React.FC<{ text: string }> = ({ text }) => {
           boxSizing: "border-box",
           fontFamily,
           fontWeight: 800,
-          fontSize: 44,
+          fontSize,
           lineHeight: 1.32,
           textAlign: "center",
           color: "#fff",
