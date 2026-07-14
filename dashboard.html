@@ -64,6 +64,18 @@ textarea.form-input{height:auto;padding:10px 14px;resize:vertical}
 .btn-toggle:hover{border-color:var(--brand);color:var(--brand)}
 .btn-toggle.selected{background:var(--brand);border-color:var(--brand);color:#fff}
 
+/* ── STEP0 자동수집 카드 ── */
+.collect-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:14px}
+.collect-card{border:2px solid var(--g200);border-radius:var(--radius-sm);padding:12px;background:var(--g50);position:relative;transition:border-color .15s}
+.collect-card.selected{border-color:var(--brand);box-shadow:0 0 0 3px var(--brand-light)}
+.collect-card.unselected{opacity:.55}
+.collect-thumb{width:100%;height:140px;object-fit:cover;border-radius:8px;background:var(--g200);margin-bottom:8px}
+.collect-name{font-size:13px;font-weight:700;color:var(--g900);margin-bottom:6px;line-height:1.4;max-height:2.8em;overflow:hidden}
+.collect-meta{font-size:11px;color:var(--g600);margin-bottom:8px}
+.collect-cat-select{width:100%;height:32px;border:1.5px solid var(--g300);border-radius:6px;padding:0 8px;font-size:12px;font-family:inherit;margin-bottom:8px}
+.collect-check-row{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--g700);cursor:pointer}
+.collect-check-row input{width:16px;height:16px;cursor:pointer}
+
 /* ── Thumbnail picker ── */
 .thumb-pick-item{border:2px solid var(--g200);border-radius:var(--radius-sm);padding:10px;cursor:pointer;transition:border-color .15s,box-shadow .15s;background:var(--g50);position:relative;min-height:80px}
 .thumb-pick-item:hover{border-color:var(--brand)}
@@ -231,7 +243,9 @@ textarea.form-input{height:auto;padding:10px 14px;resize:vertical}
 </div>
 
 <div class="stage-bar">
-  <div class="stage-item" onclick="goToStep(1)"><div class="stage-dot active" id="dot1">1</div><span class="stage-label active" id="lbl1">정보 입력</span></div>
+  <div class="stage-item" onclick="goToStep(0)"><div class="stage-dot active" id="dot0">0</div><span class="stage-label active" id="lbl0">자동수집</span></div>
+  <div class="stage-arrow" id="arr0"></div>
+  <div class="stage-item" onclick="goToStep(1)"><div class="stage-dot" id="dot1">1</div><span class="stage-label" id="lbl1">정보 입력</span></div>
   <div class="stage-arrow" id="arr1"></div>
   <div class="stage-item" onclick="goToStep(2)"><div class="stage-dot" id="dot2">2</div><span class="stage-label" id="lbl2">파이프라인</span></div>
   <div class="stage-arrow" id="arr2"></div>
@@ -243,13 +257,46 @@ textarea.form-input{height:auto;padding:10px 14px;resize:vertical}
   <div class="stage-arrow" id="arr5"></div>
   <div class="stage-item" onclick="goToStep(6)"><div class="stage-dot" id="dot6">6</div><span class="stage-label" id="lbl6">업로드 검토</span></div>
   <div class="stage-arrow" id="arr6"></div>
-  <div class="stage-item" onclick="goToStep(7)"><div class="stage-dot" id="dot7">7</div><span class="stage-label" id="lbl7">업로드 실행</span></div>
+  <div class="stage-item" onclick="enterUploadStep()"><div class="stage-dot" id="dot7">7</div><span class="stage-label" id="lbl7">업로드 실행</span></div>
 </div>
 
 <div class="main">
 
+<!-- ===== STEP 0 : 자동수집 ===== -->
+<div id="step0" class="step-section active">
+
+  <div class="card">
+    <div class="card-header"><h2>🔎 쿠팡 URL 자동 수집</h2><span class="badge">선택</span></div>
+    <div class="card-body">
+      <p style="font-size:12px;color:var(--g500);margin-bottom:12px">
+        쿠팡 파트너스 링크(또는 상품 URL)를 줄바꿈으로 구분해 여러 개 입력할 수 있습니다. (최대 10개)<br>
+        가격·할인율 정보는 수집하지 않습니다 — 상품명·이미지·평점·리뷰수만 가져옵니다.
+      </p>
+      <div class="form-row">
+        <label class="form-label">쿠팡 URL</label>
+        <textarea class="form-input" id="collectUrls" rows="4"
+          placeholder="https://link.coupang.com/a/...&#10;https://www.coupang.com/vp/products/..."></textarea>
+      </div>
+      <button class="run-btn" id="btn-collect" onclick="collectProducts()">🔎 수집 시작</button>
+      <div id="collect-status" style="font-size:12px;color:var(--g500);margin-top:10px;min-height:18px"></div>
+    </div>
+  </div>
+
+  <div class="card" id="collect-results-card" style="display:none">
+    <div class="card-header"><h2>📦 수집 결과</h2><span class="badge" id="collect-count-badge">0개</span></div>
+    <div class="card-body">
+      <div id="collectResults" class="collect-grid"></div>
+      <button class="run-btn" style="margin-top:16px" onclick="confirmCollectSelection()">
+        ✅ 선택 완료 → STEP1로 전달
+      </button>
+    </div>
+  </div>
+
+</div><!-- /step0 -->
+
+
 <!-- ===== STEP 1 ===== -->
-<div id="step1" class="step-section active">
+<div id="step1" class="step-section">
 
   <!-- 제품 기본 정보 -->
   <div class="card">
@@ -276,7 +323,9 @@ textarea.form-input{height:auto;padding:10px 14px;resize:vertical}
         <button class="btn-toggle" data-val="화장품">💄 화장품</button>
         <button class="btn-toggle" data-val="주방용품">🍳 주방용품</button>
         <button class="btn-toggle" data-val="생활가전">🏠 생활가전</button>
+        <button class="btn-toggle" data-val="생활용품">🧺 생활용품</button>
         <button class="btn-toggle" data-val="자동차용품">🚗 자동차용품</button>
+        <button class="btn-toggle" data-val="식품">🍽️ 식품</button>
         <button class="btn-toggle" data-val="기타">📦 기타</button>
       </div>
       <div class="error-msg" id="err-category">카테고리를 선택해주세요.</div>
@@ -294,6 +343,7 @@ textarea.form-input{height:auto;padding:10px 14px;resize:vertical}
         <button class="btn-toggle" data-val="전체">🌐 전체</button>
         <button class="btn-toggle" data-val="인스타">📸 인스타</button>
         <button class="btn-toggle" data-val="유튜브">▶️ 유튜브</button>
+        <button class="btn-toggle" data-val="페이스북">📘 페이스북</button>
         <button class="btn-toggle" data-val="틱톡">🎵 틱톡</button>
         <button class="btn-toggle" data-val="네이버클립">🟢 네이버클립</button>
       </div>
@@ -371,18 +421,18 @@ textarea.form-input{height:auto;padding:10px 14px;resize:vertical}
 <!-- ===== STEP 2 ===== -->
 <div id="step2" class="step-section">
   <div class="card">
-    <div class="card-header"><h2>⚙️ 파이프라인 실행 중</h2></div>
+    <div class="card-header"><h2>⏳ 카피 생성 중</h2></div>
     <div class="card-body">
-      <div id="pipelineSteps">
-        <div class="pipeline-step"><div class="pipeline-step-icon" id="psi1">📋</div><div class="pipeline-step-text"><strong>STEP 1</strong> — 정책 파일 확인</div></div>
-        <div class="pipeline-step"><div class="pipeline-step-icon" id="psi2">🔍</div><div class="pipeline-step-text"><strong>STEP 2</strong> — 제품 파악 (이미지 분석)</div></div>
-        <div class="pipeline-step"><div class="pipeline-step-icon" id="psi3">💡</div><div class="pipeline-step-text"><strong>STEP 3</strong> — 오퍼 설계 (가치 강조)</div></div>
-        <div class="pipeline-step"><div class="pipeline-step-icon" id="psi4">🧠</div><div class="pipeline-step-text"><strong>STEP 4</strong> — 구매 심리 요소 삽입</div></div>
-        <div class="pipeline-step"><div class="pipeline-step-icon" id="psi5">✍️</div><div class="pipeline-step-text"><strong>STEP 5</strong> — 슬라이드 카피 10장 작성</div></div>
-        <div class="pipeline-step"><div class="pipeline-step-icon" id="psi6">🎨</div><div class="pipeline-step-text"><strong>STEP 6</strong> — 캐러셀 HTML 생성</div></div>
-      </div>
+      <p style="font-size:13px;color:var(--g600);line-height:1.6">
+        제품 정보·이미지·상품평 캡처를 저장했습니다. <strong>Claude Code가 자동으로</strong> 이 요청을
+        읽고 실제 제품 특징과 상품평 캡처 내용을 반영해 슬라이드 7장 카피를 작성합니다(최대 5분).<br>
+        자동 처리가 실패하면 아래에 안내가 표시되고, 그때는 Claude Code 세션에 직접
+        "pending 요청 처리해줘"라고 요청하는 수동 방식으로도 이어서 진행할 수 있습니다.
+      </p>
       <div class="progress-wrap" style="margin-top:16px"><div class="progress-bar" id="progressBar"></div></div>
       <p style="font-size:12px;color:var(--g500);margin-top:8px;text-align:center" id="progressLabel">처리 중...</p>
+      <p style="font-size:11px;color:var(--g400);margin-top:4px;text-align:center">요청 ID: <code id="copyRequestIdText">-</code></p>
+      <button class="action-btn" style="margin-top:12px;width:100%" onclick="cancelCopyRequest()">✖ 취소하고 STEP 1로 돌아가기</button>
     </div>
   </div>
 </div><!-- /step2 -->
@@ -399,7 +449,7 @@ textarea.form-input{height:auto;padding:10px 14px;resize:vertical}
       <div class="ab-grid">
         <div class="ab-card" id="abA" onclick="selectAB('A')">
           <div class="ab-label">A안</div><div class="ab-check">✓</div>
-          <p id="abAText">지금 이 순간만 놓치지 마세요<br>역대급 특가 진행 중 ✨</p>
+          <p id="abAText">지금 이 순간만 놓치지 마세요<br>특가 진행 중 ✨</p>
         </div>
         <div class="ab-card" id="abB" onclick="selectAB('B')">
           <div class="ab-label">B안</div><div class="ab-check">✓</div>
@@ -414,7 +464,7 @@ textarea.form-input{height:auto;padding:10px 14px;resize:vertical}
 
   <!-- 슬라이드 카피 -->
   <div class="card">
-    <div class="card-header"><h2>📄 슬라이드 카피 10장</h2></div>
+    <div class="card-header"><h2>📄 슬라이드 카피 7장</h2></div>
     <div class="card-body"><div class="slide-list" id="slideList"></div></div>
   </div>
 
@@ -423,7 +473,7 @@ textarea.form-input{height:auto;padding:10px 14px;resize:vertical}
     <div class="card-header"><h2>📥 결과물 다운로드</h2></div>
     <div class="card-body">
       <div class="action-row">
-        <button id="btn-download-png" class="action-btn primary" onclick="downloadPNG()">🖼️ PNG 10장 다운로드</button>
+        <button id="btn-download-png" class="action-btn primary" onclick="downloadPNG()">🖼️ PNG 7장 다운로드</button>
         <button id="btn-download-srt" class="action-btn" onclick="downloadSRT()">💬 자막 다운로드</button>
         <button class="action-btn" onclick="copyCaption()">📋 캡션 복사</button>
         <button class="action-btn" onclick="saveDrive()">☁️ Google Drive 저장</button>
@@ -482,44 +532,38 @@ textarea.form-input{height:auto;padding:10px 14px;resize:vertical}
     <div class="card-body">
       <div class="tts-voice-row">
         <select class="form-input" id="ttsVoice">
-          <option value="Kore" selected>Kore — 확고한 (기본)</option>
-          <option value="Zephyr">Zephyr — 밝은</option>
-          <option value="Puck">Puck — 장난스러운</option>
-          <option value="Charon">Charon — 차분한</option>
-          <option value="Fenrir">Fenrir — 흥분된</option>
-          <option value="Leda">Leda — 어린</option>
-          <option value="Orus">Orus — 확고한</option>
-          <option value="Aoede">Aoede — 경쾌한</option>
-          <option value="Callirrhoe">Callirrhoe — 편안한</option>
-          <option value="Autonoe">Autonoe — 밝은</option>
-          <option value="Enceladus">Enceladus — 숨찬</option>
-          <option value="Iapetus">Iapetus — 차분한</option>
-          <option value="Umbriel">Umbriel — 편안한</option>
-          <option value="Algieba">Algieba — 차분한</option>
-          <option value="Despina">Despina — 편안한</option>
-          <option value="Erinome">Erinome — 차분한</option>
-          <option value="Algenib">Algenib — 자갈목소리</option>
-          <option value="Rasalgethi">Rasalgethi — 알림</option>
-          <option value="Laomedeia">Laomedeia — 경쾌한</option>
-          <option value="Achernar">Achernar — 부드러운</option>
-          <option value="Alnilam">Alnilam — 확고한</option>
-          <option value="Schedar">Schedar — 차분한</option>
-          <option value="Gacrux">Gacrux — 성숙한</option>
-          <option value="Pulcherrima">Pulcherrima — 가볍고 앞쪽</option>
-          <option value="Achird">Achird — 부드러운</option>
-          <option value="Zubenelgenubi">Zubenelgenubi — 편안한</option>
-          <option value="Vindemiatrix">Vindemiatrix — 표현력</option>
-          <option value="Sadachbia">Sadachbia — 생기 있는</option>
-          <option value="Sadaltager">Sadaltager — 지식적</option>
-          <option value="Sulafat">Sulafat — 따뜻한</option>
+          <option value="tc_69fc0cff784968297fb45daa" data-gender="male"   data-age="middle_age">상현 — 신뢰감 있는 (기본)</option>
+          <option value="tc_68f0727fd62a5934102f7ec0" data-gender="male"   data-age="middle_age">민욱 — 차분한</option>
+          <option value="tc_686dc43ebd6351e06ee64d74" data-gender="male"   data-age="young_adult">원우 — 또렷한</option>
+          <option value="tc_685cdfad4027aeec7d097a28" data-gender="male"   data-age="middle_age">철훈 — 묵직한</option>
+          <option value="tc_6800a387534948f191cc952b" data-gender="male"   data-age="young_adult">태우 — 활기찬</option>
+          <option value="tc_67e38d8c771b5511659c4534" data-gender="male"   data-age="elder">종대 — 중후한</option>
+          <option value="tc_67919fb54fd00e0217d2cff0" data-gender="male"   data-age="young_adult">승재 — 친근한</option>
+          <option value="tc_677f2aa4a854ddffa0ebda89" data-gender="male"   data-age="young_adult">한결 — 부드러운</option>
+          <option value="tc_656825f6e05ddffee8b0ef5e" data-gender="male"   data-age="young_adult">수호 — 단단한</option>
+          <option value="tc_632293f759d649937b97f323" data-gender="male"   data-age="young_adult">진우 — 경쾌한</option>
+          <option value="tc_64e72df02909019ec5b8acdd" data-gender="male"   data-age="young_adult">경수 — 안정적인</option>
+          <option value="tc_64f047cb28a45e30b4b5bc74" data-gender="male"   data-age="middle_age">남준 — 자신감 있는</option>
+          <option value="tc_69f2e455ea79fd197aa0476f" data-gender="female" data-age="young_adult">서현 — 부드러운</option>
+          <option value="tc_692799c46508f6b9468c54c7" data-gender="female" data-age="young_adult">다은 — 밝은</option>
+          <option value="tc_691d49ccc47926d741f15913" data-gender="female" data-age="young_adult">효은 — 차분한</option>
+          <option value="tc_68f9c6a72f0f04a417bb136f" data-gender="female" data-age="young_adult">문정 — 친근한</option>
+          <option value="tc_68ddea1e462b169ddd20b74d" data-gender="female" data-age="young_adult">이현 — 또렷한</option>
+          <option value="tc_68785db8ba9cd7503f27d921" data-gender="female" data-age="young_adult">고운 — 따뜻한</option>
+          <option value="tc_684a7a1446e2a628b5b07230" data-gender="female" data-age="middle_age">재선 — 편안한</option>
+          <option value="tc_67c90ad544cf859417f2fc3a" data-gender="female" data-age="young_adult">예진 — 경쾌한</option>
+          <option value="tc_67db72eb93add6902ea41e5c" data-gender="female" data-age="young_adult">은솔 — 산뜻한</option>
+          <option value="tc_6731b36bd944a485bc4070fd" data-gender="female" data-age="young_adult">민주 — 활발한</option>
+          <option value="tc_694b51e6dc12c8f4ec1a959c" data-gender="female" data-age="middle_age">정숙 — 엄마처럼 다정한</option>
+          <option value="tc_66d00104bda076835c38ba68" data-gender="female" data-age="young_adult">현지 — 또렷한</option>
         </select>
-        <span class="badge-new">30개 목소리</span>
+        <span class="badge-new">24개 목소리</span>
       </div>
       <p style="font-size:11px;color:var(--g500);margin-bottom:12px;line-height:1.6">
-        슬라이드 1(강조) · 4(밝게) · 8(따뜻하게) · 9(긴박) · 10(강조) 감정 태그 자동 적용
+        카테고리 선택 시 어울리는 목소리가 자동 선택됩니다 (직접 변경 후 재생성 가능) · 슬라이드 1(강조) · 4(밝게) · 8(따뜻하게) · 9(긴박) · 10(강조) 감정 태그 자동 적용
       </p>
       <button class="action-btn primary" id="btn-generate-tts" onclick="generateTTS()" style="width:100%;height:42px">
-        🎙️ 나레이션 생성 (Gemini TTS)
+        🎙️ 나레이션 생성 (Typecast TTS)
       </button>
       <div class="tts-status" id="tts-status"></div>
       <div class="tts-result-row" id="tts-result" style="display:none">
@@ -612,9 +656,9 @@ textarea.form-input{height:auto;padding:10px 14px;resize:vertical}
         <div class="info-icon">🎞️</div>
         <div>
           <strong>render.bat 실행 체크리스트</strong><br>
-          • PNG 10장 → public\input\ 폴더에 복사<br>
+          • PNG 7장 → public\input\ 폴더에 복사<br>
           • render.bat 실행 → output\ 폴더에 MP4 생성 확인<br>
-          • 해상도: 1080×1920 (9:16) | 슬라이드당 2.5초
+          • 해상도: 1080×1920 (9:16) | 슬라이드당 3초
         </div>
       </div>
       <div class="divider"></div>
@@ -706,22 +750,39 @@ textarea.form-input{height:auto;padding:10px 14px;resize:vertical}
         <button class="tab-btn" onclick="switchTab(event,'youtube')">▶️ 유튜브</button>
         <button class="tab-btn" onclick="switchTab(event,'tiktok')">🎵 틱톡</button>
         <button class="tab-btn" onclick="switchTab(event,'naver')">🟢 네이버클립</button>
+        <button class="tab-btn" onclick="switchTab(event,'facebook')">📘 페이스북</button>
       </div>
       <div class="tab-content active" id="tab-insta">
         <div class="caption-box" id="caption-insta"></div>
         <div class="action-row"><button class="action-btn" onclick="copyText('caption-insta')">📋 캡션 복사</button></div>
+        <div class="info-box" style="margin-top:12px">
+          <div class="info-icon">📌</div>
+          <div>업로드 시 Instagram 앱 → 게시물 고급 설정에서 <strong>"브랜드 콘텐츠 도구" → 유료 파트너십 라벨</strong>을 꼭 켜주세요.</div>
+        </div>
       </div>
       <div class="tab-content" id="tab-youtube">
         <div class="caption-box" id="caption-youtube"></div>
         <div class="action-row"><button class="action-btn" onclick="copyText('caption-youtube')">📋 전체 복사</button></div>
+        <div class="info-box" style="margin-top:12px">
+          <div class="info-icon">📌</div>
+          <div>업로드 시 YouTube Studio → 세부정보에서 <strong>"유료 프로모션 포함"</strong> 체크박스를 꼭 켜주세요.</div>
+        </div>
       </div>
       <div class="tab-content" id="tab-tiktok">
         <div class="caption-box" id="caption-tiktok"></div>
         <div class="action-row"><button class="action-btn" onclick="copyText('caption-tiktok')">📋 복사</button></div>
+        <div class="info-box" style="margin-top:12px">
+          <div class="info-icon">📌</div>
+          <div>업로드 시 TikTok 앱 → 게시물 옵션에서 <strong>"브랜드 콘텐츠"</strong> 토글을 꼭 ON으로 켜주세요.</div>
+        </div>
       </div>
       <div class="tab-content" id="tab-naver">
         <div class="caption-box" id="caption-naver"></div>
         <div class="action-row"><button class="action-btn" onclick="copyText('caption-naver')">📋 복사</button></div>
+      </div>
+      <div class="tab-content" id="tab-facebook">
+        <div class="caption-box" id="caption-facebook"></div>
+        <div class="action-row"><button class="action-btn" onclick="copyText('caption-facebook')">📋 캡션 복사</button></div>
       </div>
     </div>
   </div>
@@ -731,7 +792,6 @@ textarea.form-input{height:auto;padding:10px 14px;resize:vertical}
     <div class="card-header"><h2>📌 고정 댓글 템플릿 (전 플랫폼 공통)</h2></div>
     <div class="card-body">
       <div class="comment-template" id="commentTemplate">❤️ 제품 구매 방법 ❤️
-
 📌 프로필 링크에서 확인하세요!
 👉 https://link.inpock.co.kr/kyh498601
 못찾으시면 댓글에 "구매링크" 남겨주세요 😊</div>
@@ -870,16 +930,17 @@ textarea.form-input{height:auto;padding:10px 14px;resize:vertical}
       <div class="btn-group" id="uploadPlatformGroup">
         <button class="btn-toggle selected" data-plat="youtube" onclick="toggleUploadPlatform(this)">▶️ YouTube</button>
         <button class="btn-toggle" data-plat="instagram" onclick="toggleUploadPlatform(this)">📸 Instagram</button>
+        <button class="btn-toggle" data-plat="facebook" onclick="toggleUploadPlatform(this)">📘 Facebook</button>
         <button class="btn-toggle" data-plat="tiktok" onclick="toggleUploadPlatform(this)">🎵 TikTok</button>
       </div>
       <div style="margin-top:12px;font-size:12px;color:var(--g600);line-height:1.8">
-        ▶️ YouTube — API 자동 업로드 지원<br>
-        📸 Instagram · 🎵 TikTok — 캡션 복사 후 수동 업로드 안내
+        ▶️ YouTube · 📸 Instagram · 📘 Facebook — API 자동 업로드 지원<br>
+        🎵 TikTok — 캡션 복사 후 수동 업로드 안내
       </div>
     </div>
   </div>
 
-  <button class="run-btn" onclick="goToStep(7); initUploadStep()">
+  <button class="run-btn" onclick="enterUploadStep()">
     📤 STEP 7 — 업로드 실행하기
   </button>
 
@@ -936,18 +997,70 @@ textarea.form-input{height:auto;padding:10px 14px;resize:vertical}
 
   <!-- Instagram -->
   <div class="card" id="upload-ig-card" style="display:none">
-    <div class="card-header"><h2>📸 Instagram 업로드</h2><span class="badge" style="background:#E3F2FD;color:#1565C0">수동 업로드</span></div>
+    <div class="card-header">
+      <h2>📸 Instagram 릴스 업로드</h2>
+      <span class="badge">자동 업로드</span>
+    </div>
     <div class="card-body">
-      <div class="info-box" style="background:#FFF3E0;border-color:#FFB74D">
-        <div class="info-icon">ℹ️</div>
-        <div>
-          Instagram API는 비즈니스 계정 전용 심사가 필요합니다.<br>
-          아래 캡션을 복사해 앱에서 직접 업로드하세요.
-        </div>
+      <p style="font-size:11px;color:var(--g500);margin-bottom:8px">
+        캡션은 STEP 6 "설명" 필드 값을 그대로 사용합니다.
+      </p>
+      <div class="caption-box" id="ig-caption-preview" style="max-height:140px;margin-bottom:14px"></div>
+
+      <div class="progress-wrap" id="ig-progress-wrap" style="display:none;margin-bottom:10px">
+        <div class="progress-bar" id="ig-progress-bar"></div>
       </div>
-      <div style="margin-top:12px">
-        <div class="caption-box" id="ig-caption-preview" style="max-height:140px"></div>
-        <div class="action-row"><button class="action-btn primary" onclick="copyText('ig-caption-preview')">📋 인스타 캡션 복사</button></div>
+      <div id="ig-status" style="font-size:12px;color:var(--g500);margin-bottom:10px;min-height:18px"></div>
+
+      <button class="run-btn" id="btn-ig-upload" onclick="uploadToInstagram()">
+        📸 Instagram에 업로드
+      </button>
+
+      <div id="ig-result" style="display:none;margin-top:14px;padding:14px;
+           background:var(--brand-light);border-radius:var(--radius-sm)">
+        <div style="font-size:13px;font-weight:700;color:var(--brand-dark);margin-bottom:6px">✅ 릴스 게시 완료!</div>
+        <div style="font-size:12px;color:var(--g700)">media_id: <span id="ig-result-media-id" style="font-family:monospace"></span></div>
+      </div>
+
+      <div id="ig-fail" style="display:none;margin-top:14px;padding:14px;background:#FEF2F2;border-radius:var(--radius-sm)">
+        <div style="font-size:13px;font-weight:700;color:#B91C1C">❌ Instagram 업로드 실패</div>
+        <div style="font-size:12px;color:var(--g600);margin-top:4px" id="ig-fail-msg"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Facebook -->
+  <div class="card" id="upload-fb-card" style="display:none">
+    <div class="card-header">
+      <h2>📘 Facebook 게시</h2>
+      <span class="badge">자동 업로드</span>
+    </div>
+    <div class="card-body">
+      <p style="font-size:11px;color:var(--g500);margin-bottom:8px">
+        "생활꿀템연구소" 페이지(Instagram과 동일한 페이지 · 별도 인증된 페이지 토큰 사용)에 영상과 함께 게시됩니다.
+        캡션은 STEP 5 "페이스북" 탭 값을 사용하며, 쿠팡 파트너스 링크가 클릭 가능한 형태로 직접 포함됩니다.
+      </p>
+      <div class="caption-box" id="fb-caption-preview" style="max-height:140px;margin-bottom:14px"></div>
+
+      <div class="progress-wrap" id="fb-progress-wrap" style="display:none;margin-bottom:10px">
+        <div class="progress-bar" id="fb-progress-bar"></div>
+      </div>
+      <div id="fb-status" style="font-size:12px;color:var(--g500);margin-bottom:10px;min-height:18px"></div>
+
+      <button class="run-btn" id="btn-fb-upload" onclick="uploadToFacebook()">
+        📘 Facebook에 게시
+      </button>
+
+      <div id="fb-result" style="display:none;margin-top:14px;padding:14px;
+           background:var(--brand-light);border-radius:var(--radius-sm)">
+        <div style="font-size:13px;font-weight:700;color:var(--brand-dark);margin-bottom:8px">✅ 게시 완료!</div>
+        <a id="fb-result-link" href="" target="_blank"
+           style="font-size:13px;color:var(--brand);word-break:break-all"></a>
+      </div>
+
+      <div id="fb-fail" style="display:none;margin-top:14px;padding:14px;background:#FEF2F2;border-radius:var(--radius-sm)">
+        <div style="font-size:13px;font-weight:700;color:#B91C1C">❌ Facebook 게시 실패</div>
+        <div style="font-size:12px;color:var(--g600);margin-top:4px" id="fb-fail-msg"></div>
       </div>
     </div>
   </div>
@@ -966,6 +1079,31 @@ textarea.form-input{height:auto;padding:10px 14px;resize:vertical}
       <div style="margin-top:12px">
         <div class="caption-box" id="tt-caption-preview" style="max-height:100px"></div>
         <div class="action-row"><button class="action-btn primary" onclick="copyText('tt-caption-preview')">📋 틱톡 캡션 복사</button></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 커뮤니티 게시물 생성 -->
+  <div class="card" id="upload-community-card">
+    <div class="card-header"><h2>📝 커뮤니티 게시물 생성</h2></div>
+    <div class="card-body">
+      <div class="form-row">
+        <label class="form-label">영상 제목</label>
+        <input type="text" class="form-input" id="cp-title" placeholder="예: 이거 진짜 대박이에요 — 세타필 모이스처라이징 로션">
+      </div>
+      <div class="form-row">
+        <label class="form-label">영상 URL</label>
+        <input type="url" class="form-input" id="cp-url" placeholder="https://youtube.com/shorts/xxxxx">
+      </div>
+      <button class="action-btn primary" id="btn-cp-generate" onclick="generateCommunityPost()" style="width:100%;height:42px">
+        📝 게시물 생성
+      </button>
+      <div class="form-row" style="margin-top:14px">
+        <label class="form-label">생성된 게시물</label>
+        <textarea class="form-input" id="cp-result" rows="5" readonly placeholder="게시물을 생성하면 여기에 표시됩니다."></textarea>
+      </div>
+      <div class="action-row">
+        <button class="action-btn" onclick="copyCommunityPost()">📋 복사</button>
       </div>
     </div>
   </div>
@@ -994,10 +1132,33 @@ const state = {
   productImages: [],  // {url, b64}
   reviewImages:  [],
   abChoice:      null,
-  currentStep:   1,
+  currentStep:   0,
   slides:        [],
+  thumbnailA:    '',  // completed JSON의 thumbnailA — 슬라이드1 헤드라인의 어투 변형
+  thumbnailB:    '',
+  pendingCopyRequestId: null,  // STEP2에서 /request-copy로 저장한 요청 ID (완료 전까지 폴링에 사용)
   policies:      [],  // [{platform, text}]
+  voiceManuallySet: false,  // 사용자가 TTS 목소리를 직접 선택했는지 (true면 카테고리 자동 매칭 중단)
+  collectedProducts: [],  // STEP0 수집 결과 {sourceUrl,pageKey,name,rating,reviewCount,category,thumbnail,imageUrls,selected}
 };
+
+// 카테고리별 기본 TTS 목소리 자동 매칭 (Typecast voice_id)
+const CATEGORY_VOICE_MAP = {
+  '화장품':     'tc_69f2e455ea79fd197aa0476f',  // 서현 — 부드러운
+  '주방용품':   'tc_694b51e6dc12c8f4ec1a959c',  // 정숙 — 엄마처럼 다정한
+  '생활가전':   'tc_69fc0cff784968297fb45daa',  // 상현 — 신뢰감 있는
+  '생활용품':   'tc_694b51e6dc12c8f4ec1a959c',  // 정숙 — 엄마처럼 다정한 (주방용품과 동일, 생활잡화 톤에 적합)
+  '자동차용품': 'tc_6800a387534948f191cc952b',  // 태우 — 활기찬
+  '식품':       'tc_67c90ad544cf859417f2fc3a',  // 예진 — 경쾌한 (기타와 동일, 먹거리 소개 톤에 적합)
+  '기타':       'tc_67c90ad544cf859417f2fc3a',  // 예진 — 경쾌한
+};
+
+function applyDefaultVoiceForCategory(cat) {
+  if (state.voiceManuallySet) return;  // 사용자가 수동 선택했으면 자동 매칭하지 않음
+  const voiceId = CATEGORY_VOICE_MAP[cat];
+  const sel = document.getElementById('ttsVoice');
+  if (voiceId && sel) sel.value = voiceId;
+}
 
 // ── Persist ──────────────────────────────────────────────────
 function saveState() {
@@ -1010,6 +1171,10 @@ function saveState() {
     reviewImages:  state.reviewImages.map(i => ({ url: i.url })),
     abChoice:      state.abChoice,
     currentStep:   state.currentStep,
+    slides:        state.slides,
+    thumbnailA:    state.thumbnailA,
+    thumbnailB:    state.thumbnailB,
+    pendingCopyRequestId: state.pendingCopyRequestId,
   };
   const s = JSON.stringify(p);
   try { sessionStorage.setItem(STORAGE_KEY, s); } catch(e) {}
@@ -1030,7 +1195,11 @@ function loadState() {
     state.productImages = (d.productImages || []).map(i => ({ url: i.url, b64: i.url }));
     state.reviewImages  = (d.reviewImages  || []).map(i => ({ url: i.url, b64: i.url }));
     state.abChoice      = d.abChoice     || null;
-    state.currentStep   = d.currentStep  || 1;
+    state.currentStep   = typeof d.currentStep === 'number' ? d.currentStep : 0;
+    state.slides        = d.slides || [];
+    state.thumbnailA    = d.thumbnailA || '';
+    state.thumbnailB    = d.thumbnailB || '';
+    state.pendingCopyRequestId = d.pendingCopyRequestId || null;
     return true;
   } catch(e) { return false; }
 }
@@ -1117,6 +1286,11 @@ document.getElementById('categoryGroup').addEventListener('click', e => {
   document.querySelectorAll('#categoryGroup .btn-toggle').forEach(b => b.classList.remove('selected'));
   btn.classList.add('selected');
   state.category = btn.dataset.val; updateChecklist(); saveState();
+  applyDefaultVoiceForCategory(state.category);
+});
+
+document.getElementById('ttsVoice').addEventListener('change', () => {
+  state.voiceManuallySet = true;  // 수동 선택 후에는 카테고리 변경으로 덮어쓰지 않음
 });
 
 document.getElementById('platformGroup').addEventListener('click', e => {
@@ -1150,19 +1324,30 @@ function handleDrop(e, type) {
   addImages([...e.dataTransfer.files].filter(f => f.type.startsWith('image/')), type);
 }
 
-function addImages(files, type) {
+function readFileAsDataURL(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload  = ev => resolve(ev.target.result);
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}
+
+async function addImages(files, type) {
   const arr = type === 'product' ? state.productImages : state.reviewImages;
   const limit = type === 'product' ? 10 : 2;
   const remaining = limit - arr.length;
   if (files.length > remaining) showToast(`최대 ${limit}장까지 업로드 가능합니다.`);
-  files.slice(0, remaining).forEach(file => {
-    const reader = new FileReader();
-    reader.onload = ev => {
-      arr.push({ file, url: ev.target.result, b64: ev.target.result });
-      renderPreviews(type); updateChecklist(); saveState();
-    };
-    reader.readAsDataURL(file);
+  const selected = files.slice(0, remaining);
+  // 선택 순서를 보존하기 위해 전체 디코딩이 끝난 뒤 원래 순서대로 push한다
+  // (개별 onload에서 바로 push하면 디코딩이 먼저 끝난 파일이 앞자리를 차지하는
+  //  레이스 컨디션이 생겨, server.py가 대표 이미지로 쓰는 images[0]이 실제
+  //  1번째 업로드 파일과 달라짐)
+  const results = await Promise.all(selected.map(readFileAsDataURL));
+  selected.forEach((file, i) => {
+    arr.push({ file, url: results[i], b64: results[i] });
   });
+  renderPreviews(type); updateChecklist(); saveState();
 }
 
 function removeImage(type, idx) {
@@ -1178,6 +1363,127 @@ function renderPreviews(type) {
         <img src="${item.url}" alt="">
         <button class="remove-btn" onclick="removeImage('${type}',${i})">✕</button>
       </div>`).join('');
+}
+
+// ============================================================
+// STEP0 — 자동수집  ← server.py /collect-products · /confirm-selection
+// ============================================================
+async function collectProducts() {
+  const raw  = document.getElementById('collectUrls').value;
+  const urls = [...new Set(raw.split('\n').map(s => s.trim()).filter(Boolean))].slice(0, 10);
+  if (!urls.length) { showToast('쿠팡 URL을 입력해주세요.'); return; }
+
+  const btn    = document.getElementById('btn-collect');
+  const status = document.getElementById('collect-status');
+  btn.disabled = true;
+  btn.textContent = '🔎 수집 중... (URL당 최대 10초 소요)';
+  status.textContent = `⏳ ${urls.length}개 URL 수집 중...`;
+
+  try {
+    const r = await fetch('/collect-products', {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ urls }),
+    });
+    const d = await r.json();
+    state.collectedProducts = (d.products || []).map(p => ({ ...p, selected: true }));
+    renderCollectResults();
+
+    const errCount = (d.errors || []).length;
+    status.textContent = errCount
+      ? `✅ ${state.collectedProducts.length}개 수집 완료 (실패 ${errCount}개)`
+      : `✅ ${state.collectedProducts.length}개 수집 완료`;
+    if (errCount) {
+      console.warn('[STEP0 수집 실패]\n' + d.errors.map(e => `· ${e.url || '(빈 URL)'}: ${e.message}`).join('\n'));
+      showToast(`일부 URL 수집에 실패했습니다 (${errCount}개)`, '');
+    }
+  } catch (e) {
+    status.textContent = '❌ 수집 실패: ' + e.message;
+    showToast('수집 중 오류가 발생했습니다.', '');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '🔎 수집 시작';
+  }
+}
+
+function collectCategoryOptions(current) {
+  return ['화장품', '주방용품', '생활가전', '생활용품', '자동차용품', '식품', '기타']
+    .map(c => `<option value="${c}" ${c === current ? 'selected' : ''}>${c}</option>`).join('');
+}
+
+function renderCollectResults() {
+  const card  = document.getElementById('collect-results-card');
+  const el    = document.getElementById('collectResults');
+  const badge = document.getElementById('collect-count-badge');
+  const items = state.collectedProducts;
+
+  card.style.display = items.length ? '' : 'none';
+  badge.textContent  = `${items.length}개`;
+
+  el.innerHTML = items.map((p, i) => `
+    <div class="collect-card ${p.selected ? 'selected' : 'unselected'}">
+      <img class="collect-thumb" src="${p.thumbnail || ''}" alt="" onerror="this.style.visibility='hidden'">
+      <div class="collect-name">${esc(p.name)}</div>
+      <div class="collect-meta">⭐ ${esc(p.rating || '-')} · 리뷰 ${esc(p.reviewCount || '0')}개 · 이미지 ${(p.imageUrls || []).length}장</div>
+      <select class="collect-cat-select" onchange="updateCollectCategory(${i}, this.value)">
+        ${collectCategoryOptions(p.category)}
+      </select>
+      <label class="collect-check-row">
+        <input type="checkbox" ${p.selected ? 'checked' : ''} onchange="toggleCollectSelect(${i})">
+        이 상품 선택
+      </label>
+    </div>`).join('');
+}
+
+function toggleCollectSelect(i) {
+  state.collectedProducts[i].selected = !state.collectedProducts[i].selected;
+  renderCollectResults();
+}
+
+function updateCollectCategory(i, val) {
+  state.collectedProducts[i].category = val;
+}
+
+async function confirmCollectSelection() {
+  const selected = state.collectedProducts.filter(p => p.selected);
+  if (selected.length === 0) { showToast('선택된 상품이 없습니다.'); return; }
+  if (selected.length > 1) {
+    showToast('STEP1은 상품 1개만 처리할 수 있어요. 하나만 체크해주세요.', '');
+    return;
+  }
+
+  const picked = selected[0];
+  showToast('선택한 상품 이미지를 내려받는 중...', '');
+
+  try {
+    const r = await fetch('/confirm-selection', {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ name: picked.name, category: picked.category, imageUrls: picked.imageUrls || [] }),
+    });
+    const d = await r.json();
+
+    state.productName   = d.name || picked.name;
+    state.category      = d.category || picked.category;
+    state.productImages = (d.images || []).map(b64 => ({ url: b64, b64 }));
+
+    document.getElementById('productName').value = state.productName;
+    document.querySelectorAll('#categoryGroup .btn-toggle')
+      .forEach(b => b.classList.toggle('selected', b.dataset.val === state.category));
+    applyDefaultVoiceForCategory(state.category);
+    renderPreviews('product');
+    updateChecklist();
+    saveState();
+
+    if (!state.productImages.length) {
+      showToast('⚠️ 이미지를 내려받지 못했습니다. STEP1에서 직접 업로드해주세요.', '');
+    } else {
+      showToast(`✅ "${state.productName}" 정보를 STEP1에 채웠습니다.`, 'success');
+    }
+    goToStep(1);
+  } catch (e) {
+    showToast('선택 완료 처리 중 오류가 발생했습니다.', '');
+  }
 }
 
 // ============================================================
@@ -1224,111 +1530,228 @@ function validate() {
 
 function startPipeline() {
   if (!validate()) return;
-  goToStep(2); animatePipeline();
+  goToStep(2);
+  requestCopyGeneration();
 }
 
-function animatePipeline() {
-  const activePolicies = state.policies.filter(p => p.text.trim()).length;
-  const labels = [
-    activePolicies > 0 ? `정책 파일 확인 완료 (${activePolicies}개 플랫폼 반영)` : '정책 파일 확인 완료',
-    '제품 파악 완료','오퍼 설계 완료','구매 심리 삽입 완료','슬라이드 카피 완성','캐러셀 HTML 생성 완료',
-  ];
+// ============================================================
+// STEP2 — 카피 생성 요청 (비동기, Claude Code 세션이 처리)
+// ============================================================
+// 2026-07-09: 가짜 setTimeout 애니메이션(animatePipeline) + 카테고리 고정 템플릿
+// 즉시 반환(buildSlideCopy) 구조를 걷어내고, 서버에 요청을 저장한 뒤 완료를
+// 폴링하는 구조로 교체. 트리거는 수동이다 — pending 요청이 생겨도 서버가
+// 자동으로 처리하지 않으므로, 대시보드는 "얼마나 걸릴지 모르는 대기"를
+// 전제로 한 UI(경과 시간 표시 + 취소 버튼)를 보여준다.
+let _copyPollTimer    = null;
+let _copyPollAttempts = 0;
+
+async function requestCopyGeneration() {
   const bar = document.getElementById('progressBar');
   const lbl = document.getElementById('progressLabel');
-  let i = 0;
-  const next = () => {
-    if (i >= 6) { lbl.textContent = '✅ 완료! 결과물 확인 중...'; setTimeout(() => { goToStep(3); fillResults(); }, 800); return; }
-    const icon = document.getElementById(`psi${i+1}`);
-    icon.classList.add('running'); icon.textContent = '⏳';
-    lbl.textContent = `진행 중: STEP ${i+1}...`;
-    setTimeout(() => {
-      icon.classList.remove('running'); icon.classList.add('done'); icon.textContent = '✓';
-      bar.style.width = `${((i+1)/6)*100}%`;
-      i++; setTimeout(next, 400);
-    }, 700 + Math.random()*400);
-  };
-  next();
+  bar.style.width = '5%';
+  lbl.textContent = '카피 생성 요청 전송 중...';
+  document.getElementById('copyRequestIdText').textContent = '-';
+
+  const effectiveCat = resolveFoodCategory(state.category, state.productName);
+
+  try {
+    const r = await fetch('/request-copy', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        productName:   state.productName,
+        partnerLink:   state.partnerLink,
+        category:      effectiveCat,
+        productImages: state.productImages.map(i => i.b64 || i.url),
+        reviewImages:  state.reviewImages.map(i => i.b64 || i.url),
+      }),
+    });
+    const d = await r.json();
+    if (!d.ok) {
+      showToast('❌ ' + (d.errors ? d.errors.join(' / ') : '카피 생성 요청 실패'));
+      goToStep(1);
+      return;
+    }
+    state.pendingCopyRequestId = d.requestId;
+    saveState();
+    beginCopyPolling();
+  } catch (e) {
+    showToast('❌ 카피 생성 요청 실패: ' + e.message);
+    goToStep(1);
+  }
+}
+
+function beginCopyPolling() {
+  const lbl = document.getElementById('progressLabel');
+  document.getElementById('progressBar').style.width = '15%';
+  document.getElementById('progressBar').style.background = '';
+  document.getElementById('copyRequestIdText').textContent = state.pendingCopyRequestId || '-';
+  lbl.textContent = '카피 생성 요청 전달됨 — 자동 처리 시작 대기 중...';
+  _copyPollAttempts = 0;
+  if (_copyPollTimer) clearInterval(_copyPollTimer);
+  _copyPollTimer = setInterval(pollCopyStatus, 3000);
+  pollCopyStatus();
+}
+
+// 2026-07-09(3차): 헤드리스 자동 트리거 추가로 pending(대기, 자동실행 시작 전 극히
+// 짧은 순간) / processing(자동 처리 중) / done(완료) / failed(자동 처리 실패 —
+// claude CLI 없음/5분 타임아웃/completed 파일 미생성) 4가지 상태를 구분해서 보여준다.
+// failed여도 pending 파일은 서버가 지우지 않으므로, 기존 수동 트리거("pending 처리해줘")
+// 로 그대로 이어받을 수 있다 — 그래서 실패 시에도 요청 ID를 화면에 계속 보여준다.
+async function pollCopyStatus() {
+  if (!state.pendingCopyRequestId) return;
+  try {
+    const r = await fetch('/copy-status?requestId=' + encodeURIComponent(state.pendingCopyRequestId));
+    const d = await r.json();
+    const lbl = document.getElementById('progressLabel');
+    const bar = document.getElementById('progressBar');
+    if (d.status === 'done') {
+      clearInterval(_copyPollTimer); _copyPollTimer = null;
+      bar.style.width = '100%';
+      lbl.textContent = '✅ 카피 생성 완료! 결과물 확인 중...';
+      applyGeneratedCopy(d.data);
+      state.pendingCopyRequestId = null;
+      saveState();
+      setTimeout(() => goToStep(3), 500);
+    } else if (d.status === 'processing') {
+      _copyPollAttempts++;
+      bar.style.width = Math.min(15 + _copyPollAttempts * 2, 90) + '%';
+      lbl.textContent = `🤖 Claude Code가 자동으로 카피를 작성하는 중입니다... (${_copyPollAttempts * 3}초 경과, 최대 5분)`;
+    } else if (d.status === 'pending') {
+      _copyPollAttempts++;
+      lbl.textContent = `카피 생성 대기 중... (${_copyPollAttempts * 3}초 경과) — 자동 처리가 곧 시작되지 않으면 수동으로 "pending 요청 처리해줘"라고 요청해주세요`;
+    } else if (d.status === 'failed') {
+      clearInterval(_copyPollTimer); _copyPollTimer = null;
+      bar.style.background = '#DC2626';
+      lbl.innerHTML = `❌ 자동 처리 실패: ${esc(d.error || '알 수 없는 오류')}<br>대신 Claude Code 세션에 <strong>"pending 요청 처리해줘"</strong>라고 직접 요청하시면 이 요청 ID로 계속 처리할 수 있습니다.`;
+    } else if (d.status === 'not_found') {
+      clearInterval(_copyPollTimer); _copyPollTimer = null;
+      showToast('⚠️ 요청을 찾을 수 없습니다. 다시 시도해주세요.');
+      state.pendingCopyRequestId = null;
+      saveState();
+      goToStep(1);
+    }
+  } catch (e) {
+    console.warn('[카피 폴링 오류]', e);
+  }
+}
+
+function cancelCopyRequest() {
+  if (_copyPollTimer) { clearInterval(_copyPollTimer); _copyPollTimer = null; }
+  const reqId = state.pendingCopyRequestId;
+  state.pendingCopyRequestId = null;
+  saveState();
+  if (reqId) {
+    fetch('/cancel-copy-request', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ requestId: reqId }),
+    }).catch(() => {});
+  }
+  goToStep(1);
+}
+
+// completed JSON({ requestId, slides: [{headline, body}, ...7개] })을 받아
+// SLIDE_TEMPLATES의 역할 이름(title)과 매칭해 state.slides를 채운다.
+function applyGeneratedCopy(data) {
+  const effectiveCat = resolveFoodCategory(state.category, state.productName);
+  const templates = SLIDE_TEMPLATES[effectiveCat] || Array.from({length:SLIDE_TOTAL},(_,i)=>({title:`슬라이드 ${i+1}`}));
+  const genSlides = (data && data.slides) || [];
+  state.slides = templates.map((t, i) => ({
+    title:    t.title,
+    headline: (genSlides[i] && genSlides[i].headline) || '',
+    body:     (genSlides[i] && genSlides[i].body) || '',
+  }));
+  // thumbnailA/B가 없으면(과거 포맷 등) fillResults()가 슬라이드1 헤드라인으로 폴백한다.
+  state.thumbnailA = (data && data.thumbnailA) || '';
+  state.thumbnailB = (data && data.thumbnailB) || '';
+  saveState();
+  fillResults();
 }
 
 // ============================================================
 // SLIDE COPY
 // ============================================================
+// 2026-07-06: 10장 → 7장 구조로 재작성 (지침 STEP5 참조). 기존 3+4번/6+7번/9+10번
+// 항목을 각각 통합해 7장으로 축소 — 정보 손실 없이 중복을 줄인다.
 const SLIDE_TEMPLATES = {
-  '화장품':   [{title:'후킹'},{title:'추천 피부타입'},{title:'핵심 성분'},{title:'성분 효능'},{title:'사용감/텍스처'},{title:'사용 전/후 기대효과'},{title:'피부과 인증/수상'},{title:'상품평 재가공'},{title:'특가 안내'},{title:'CTA'}],
-  '주방용품': [{title:'후킹'},{title:'추천 대상'},{title:'핵심 기능 3가지'},{title:'소재/안전성'},{title:'사용법'},{title:'용량/사이즈 스펙'},{title:'세척/관리 편의성'},{title:'상품평 재가공'},{title:'특가 안내'},{title:'CTA'}],
-  '생활가전': [{title:'후킹'},{title:'추천 대상'},{title:'핵심 기능'},{title:'스펙/성능'},{title:'사용 시나리오'},{title:'에너지효율/안전인증'},{title:'설치/사용 편의성'},{title:'상품평 재가공'},{title:'특가 안내'},{title:'CTA'}],
-  '자동차용품':[{title:'후킹'},{title:'추천 차량/운전자'},{title:'핵심 기능'},{title:'설치 방법'},{title:'호환 차종/사이즈'},{title:'안전성/인증'},{title:'전후 비교 효과'},{title:'상품평 재가공'},{title:'특가 안내'},{title:'CTA'}],
+  '화장품':   [{title:'후킹'},{title:'추천 피부타입'},{title:'주요 성분'},{title:'사용감/텍스처'},{title:'전후 효과 & 인증'},{title:'상품평 재가공'},{title:'특가 안내 & CTA'}],
+  '주방용품': [{title:'후킹'},{title:'추천 대상'},{title:'핵심 기능 & 안전성'},{title:'사용법'},{title:'사이즈 & 관리 편의성'},{title:'상품평 재가공'},{title:'특가 안내 & CTA'}],
+  '생활가전': [{title:'후킹'},{title:'추천 대상'},{title:'주요 기능'},{title:'사용 시나리오'},{title:'안전인증 & 설치 편의성'},{title:'상품평 재가공'},{title:'특가 안내 & CTA'}],
+  '자동차용품':[{title:'후킹'},{title:'추천 차량/운전자'},{title:'핵심 기능 & 설치'},{title:'호환 차종/사이즈'},{title:'안전성 & 전후 비교'},{title:'상품평 재가공'},{title:'특가 안내 & CTA'}],
+  '생활용품': [{title:'후킹'},{title:'추천 대상'},{title:'핵심 기능 & 안전성'},{title:'사용법'},{title:'사이즈 & 활용팁'},{title:'상품평 재가공'},{title:'특가 안내 & CTA'}],
+  '식품':     [{title:'후킹'},{title:'추천 대상'},{title:'안전인증 정보'},{title:'맛/식감'},{title:'조리법 & 보관법'},{title:'상품평 재가공'},{title:'특가 안내 & CTA'}],
+  // 2026-07-06: 식품 세분화 — 신선식품(과일/채소/정육 등)은 "조리법" 자체가 성립하지 않아
+  // (예: 바나나에 "전자레인지 3분 완성"이 나오는 버그) 별도 템플릿으로 분리.
+  // 2026-07-06: 3번 슬라이드 title("핵심 특징 & 안전인증")이 headline("핵심 특징 & 믿을
+  // 원재료")과 앞부분이 겹쳐 STEP3 미리보기(`${title} — ${headline}`)에 중복처럼 보이던
+  // 버그 수정 — title을 headline과 겹치지 않는 "안전인증 정보"로 교체(화장품/생활가전도 동일 수정).
+  // 2026-07-06: 5번 슬라이드 title이 headline("보관 팁 & 먹는 법")과 완전히 동일해
+  // STEP3 미리보기(`${title} — ${headline}`)에 "보관 팁 & 먹는 법 — 보관 팁 & 먹는 법"처럼
+  // 그대로 중복 표시되던 버그 수정 — title만 "신선 보관법 안내"로 교체(headline은 유지).
+  '식품_신선': [{title:'후킹'},{title:'추천 대상'},{title:'안전인증 정보'},{title:'맛/식감'},{title:'신선 보관법 안내'},{title:'상품평 재가공'},{title:'특가 안내 & CTA'}],
 };
 
-const SLIDE_COPY = {
-  '화장품': p => [
-    { headline:'피부 고민, 이게 답이에요',     body:`건성·지성·민감성 모두에게 딱!\n${p}로 피부 걱정 끝내세요` },
-    { headline:'내 피부타입에 꼭 맞아요',       body:`피부 타입별로 다른 케어가 필요해요\n${p}는 어떤 피부에도 잘 맞아요` },
-    { headline:'핵심 성분 공개',               body:`${p}에 담긴 성분들\nNiacinamide · Glycerin · Ceramide` },
-    { headline:'성분이 피부에 하는 일',         body:`흡수력·보습력·진정력 3가지 동시에\n하루 2번으로 변화를 느껴보세요` },
-    { headline:'발랐을 때 그 느낌',             body:`촉촉하지만 끈적이지 않아요\n가볍게 스며드는 텍스처가 특징이에요` },
-    { headline:'쓰기 전과 쓴 후',              body:`2주 후 달라진 피부를 직접 확인해보세요\n수분감·피부결 개선 기대할 수 있어요` },
-    { headline:'피부과도 인정했어요',           body:`피부과 테스트 완료 제품\n인증과 수상 이력이 신뢰를 말해줘요` },
-    { headline:'실사용자들의 한마디',           body:`"이거 쓰고 나서 달라졌어요"\n수만 명이 선택한 이유가 있어요` },
-    { headline:'지금이 특가 찬스!',             body:`지금 특가 진행 중이에요\n역대급 할인 놓치지 마세요` },
-    { headline:'최저가 확인하기 →',            body:`프로필 링크에서 바로 확인하세요\n👉 https://link.inpock.co.kr/kyh498601` },
-  ],
-  '주방용품': p => [
-    { headline:'요리가 즐거워져요',             body:`주방에서 이것 때문에 불편하셨죠?\n${p}로 요리 시간이 달라져요` },
-    { headline:'이런 분께 추천해요',            body:`요리 초보부터 주부까지\n누구나 쉽게 사용할 수 있어요` },
-    { headline:'핵심 기능 3가지',              body:`① 편리한 조작 ② 빠른 조리\n③ 손쉬운 세척까지 한 번에` },
-    { headline:'안전한 소재예요',              body:`KC인증·식품안전 기준 통과\n가족이 사용해도 걱정 없는 소재예요` },
-    { headline:'이렇게 사용하세요',             body:`누구나 따라 할 수 있는 간단한 방법\n처음 사용하는 분도 바로 익숙해져요` },
-    { headline:'딱 맞는 사이즈예요',            body:`1인부터 4인 가족까지 적합한 용량\n주방 공간에 부담 없는 사이즈예요` },
-    { headline:'세척이 너무 쉬워요',            body:`분리 세척 가능 · 식기세척기 OK\n관리가 쉬워서 오래 사용할 수 있어요` },
-    { headline:'실사용자들의 한마디',           body:`"이거 사고 나서 매일 써요"\n구매자 평점 4.8점 이상이에요` },
-    { headline:'지금이 역대급 할인!',           body:`지금 특가 진행 중\n이 가격에 살 수 있는 마지막 기회예요` },
-    { headline:'지금 바로 확인하기 →',          body:`프로필 링크에서 최저가 확인하세요\n👉 https://link.inpock.co.kr/kyh498601` },
-  ],
-  '생활가전': p => [
-    { headline:'생활이 달라져요',              body:`집에서 이거 하나로 해결했어요\n${p} 쓰고 나서 생활이 편해졌어요` },
-    { headline:'이런 분께 딱이에요',            body:`혼자 사는 분·바쁜 직장인 모두\n한 번만 써보면 못 놓아요` },
-    { headline:'핵심 기능 살펴봐요',            body:`스마트 센서 · 자동 조절 기능\n${p}만의 핵심 성능을 확인하세요` },
-    { headline:'성능 수치로 증명해요',          body:`소비전력 최적화로 전기료 절약\n업계 최고 수준의 성능을 자랑해요` },
-    { headline:'이런 상황에 써보세요',          body:`아침 준비·청소·취침 전 모든 순간\n일상 속 어디서나 활약해요` },
-    { headline:'안전인증 완료예요',             body:`KC인증 · 에너지효율 1등급\n안전하고 경제적으로 사용하세요` },
-    { headline:'설치가 정말 쉬워요',            body:`전문 기사 없이 혼자서도 OK\n10분이면 설치 완료예요` },
-    { headline:'실사용자들의 한마디',           body:`"진짜 꿀템이에요 강추해요"\n수만 명이 선택한 이유가 있어요` },
-    { headline:'지금이 특가 찬스!',             body:`지금 특가 진행 중\n역대급 할인 놓치지 마세요` },
-    { headline:'최저가 확인하기 →',            body:`프로필 링크에서 바로 확인하세요\n👉 https://link.inpock.co.kr/kyh498601` },
-  ],
-  '자동차용품': p => [
-    { headline:'운전이 편해져요',              body:`운전하다 이것 때문에 불편하셨죠?\n${p}로 드라이브가 달라져요` },
-    { headline:'이런 차에 딱 맞아요',           body:`국산·수입차 대부분에 호환돼요\n내 차에도 바로 사용 가능해요` },
-    { headline:'핵심 기능이 달라요',            body:`${p}만의 특별한 기능을 확인하세요\n다른 제품과 비교해 보세요` },
-    { headline:'설치가 간단해요',              body:`공구 없이 5분이면 설치 완료\n누구나 쉽게 따라 할 수 있어요` },
-    { headline:'내 차에 맞을까요?',            body:`대부분의 차종에 호환 가능해요\n사이즈 확인 후 안심하고 구매하세요` },
-    { headline:'안전이 최우선이에요',           body:`국제안전인증 통과 제품\n내 가족을 지키는 선택이에요` },
-    { headline:'쓰기 전과 쓴 후',              body:`장착 전후 차이가 확실해요\n한 번 써보면 없어서 못 살아요` },
-    { headline:'실사용자들의 한마디',           body:`"이거 없으면 운전 못 해요"\n구매자 5점 만점에 4.9점이에요` },
-    { headline:'지금이 역대급 할인!',           body:`지금 특가 진행 중\n이 가격에 살 수 있는 마지막 기회예요` },
-    { headline:'지금 확인하기 →',              body:`프로필 링크에서 최저가 확인하세요\n👉 https://link.inpock.co.kr/kyh498601` },
-  ],
-};
+// 2026-07-09: SLIDE_COPY(카테고리별 예시 문장 하드코딩 테이블) 완전 삭제.
+// 재발 버그 2건(식품인데 화장품 문구 혼입, 세탁세제인데 수납함 문구 혼입)이 전부
+// "실제 제품과 무관한 고정 문자열을 그대로 반환"하는 이 테이블 때문이었다.
+// 카피는 이제 Claude Code 세션이 제품 이미지·상품평 캡처를 직접 읽고 작성한다
+// (아래 requestCopyGeneration/pollCopyStatus/applyGeneratedCopy 참고,
+// 슬롯 구성 규칙은 category-copy-rules 스킬 · 02_Knowledge_상세규칙.md.md 참고).
+// SLIDE_TEMPLATES(위)는 슬롯 "역할 이름"만 담고 있으므로 예시 문장 문제와 무관해 그대로 둔다.
 
-function buildSlideCopy(cat, pname) {
-  const p = pname || '이 제품';
-  const copyFn = SLIDE_COPY[cat];
-  const copies = copyFn ? copyFn(p) : Array.from({length:10},(_,i)=>({ headline:`슬라이드 ${i+1}`, body:`${p} — 생활꿀템연구소 추천\n프로필 링크에서 최저가 확인하세요` }));
-  const templates = SLIDE_TEMPLATES[cat] || Array.from({length:10},(_,i)=>({title:`슬라이드 ${i+1}`}));
-  return templates.map((t, i) => ({ title: t.title, headline: copies[i].headline, body: copies[i].body }));
+const SLIDE_TOTAL = 7;
+
+// 신선식품(과일/채소/정육/생선 등) 키워드 — 상품명에 포함되면 '식품' 카테고리 안에서도
+// SLIDE_TEMPLATES['식품_신선']('조리법' 대신 '보관 팁 & 먹는 법') 템플릿을 쓴다.
+// 버그 사례: 바나나(신선식품)에 "전자레인지 3분 완성" 같은 조리 카피가 나오던 문제 수정.
+const FRESH_FOOD_KEYWORDS = [
+  '바나나','사과','배','포도','딸기','토마토','오이','당근','양파','감자','고구마',
+  '배추','상추','시금치','브로콜리','블루베리','수박','참외','멜론','키위','자두',
+  '복숭아','귤','오렌지','레몬','아보카도','파프리카','애호박','마늘','생강',
+  '소고기','돼지고기','닭고기','삼겹살','한우','생선','고등어','연어','갈치','조기',
+  '계란','달걀','우유','두부','새우','오징어','문어',
+];
+
+function resolveFoodCategory(cat, pname) {
+  if (cat !== '식품') return cat;
+  const name = pname || '';
+  return FRESH_FOOD_KEYWORDS.some(kw => name.includes(kw)) ? '식품_신선' : '식품';
 }
+
+// 2026-07-09(2차): AB_HOOK_COPY(카테고리별 고정 썸네일 후킹 문구 테이블) 삭제.
+// 슬라이드1(후킹)이 이미 Claude Code 세션이 작성한 실제 제품 카피이므로, 썸네일
+// A/B도 그 슬라이드1 카피의 어투 변형(completed JSON의 thumbnailA/thumbnailB)을
+// 그대로 쓴다 — 카테고리 고정 문구 자체가 없어지므로 07/06 버그(식품에 화장품
+// 문구 혼입) 같은 문제가 이 경로에서는 구조적으로 재발할 수 없다.
 
 // ============================================================
 // FILL RESULTS
 // ============================================================
+// 2026-07-09: 더 이상 이 함수 안에서 카피를 계산하지 않는다. state.slides/
+// thumbnailA/thumbnailB는 applyGeneratedCopy()(카피 생성 완료 시) 또는
+// loadState()(브라우저 재접속 복원 시)에서 이미 채워져 있어야 하고, 이 함수는
+// 그 값을 화면에 그리기만 한다.
 function fillResults() {
+  if (!state.slides || !state.slides.length) return;  // 아직 카피가 없으면 그릴 것도 없음
   const cat   = state.category || '기타';
   const pname = state.productName;
-  state.slides = buildSlideCopy(cat, pname);
+  // '기타'는 "기타 꿀템 발견!"/"#기타"처럼 그대로 노출하면 어색한 값이라(실제 카테고리가
+  // 아니라 미분류를 뜻하는 단어) hook/hashtag에서는 아예 생략한다. 실제 카테고리명은
+  // 기존대로 그대로 노출한다.
+  const catHashtag    = cat === '기타' ? '' : ` #${cat}`;
+  const catHookYoutube = cat === '기타'
+    ? '이거 안 보면 손해예요 — 꿀템 발견!'
+    : `이거 안 보면 손해예요 — ${cat} 꿀템 발견!`;
+  const catHookNaver = cat === '기타'
+    ? `${pname} 직접 써봤어요!`
+    : `[${cat} 추천] ${pname} 직접 써봤어요!`;
 
-  document.getElementById('abAText').innerHTML = `피부 고민, 드디어 해결!<br>${pname} 지금 특가 ✨`;
-  document.getElementById('abBText').innerHTML = `○만명이 선택한 ${pname}<br>지금 최저가 확인하기 🔥`;
+  // thumbnailA/B가 없는(과거 포맷 등) completed JSON을 받은 경우, 카테고리 고정
+  // 문구가 아니라 실제로 생성된 슬라이드1 헤드라인으로 폴백한다.
+  const fallbackHook = state.slides[0] ? state.slides[0].headline : pname || '이 제품';
+  document.getElementById('abAText').innerHTML = (state.thumbnailA || fallbackHook).replace(/\n/g, '<br>');
+  document.getElementById('abBText').innerHTML = (state.thumbnailB || fallbackHook).replace(/\n/g, '<br>');
 
   document.getElementById('slideList').innerHTML = state.slides.map((s, i) => `
     <div class="slide-item">
@@ -1339,57 +1762,88 @@ function fillResults() {
       </div>
     </div>`).join('');
 
-  document.getElementById('caption-insta').textContent =
-`이런 거 왜 이제야 알았지… 😮
+  // 모든 플랫폼 공통 캡션 조립 순서: 1) 광고문구(최우선, 첫 줄 고정) 2) 후킹 3) 핵심 혜택
+  // 4) CTA + 링크 안내 5) 해시태그. 광고문구는 해시태그 묶음이나 고정 댓글이 아니라
+  // 반드시 캡션 맨 첫 줄에 온다 (공정위 유료광고 표시 가이드 대응).
+  const AD_DISCLOSURE = '[유료광고] 이 포스팅은 쿠팡파트너스 활동의 일환으로, 이에 따른 일정액의 수수료를 제공받습니다';
+  const partnerLink   = state.partnerLink || '쿠팡 파트너스 링크를 STEP 1에서 입력해주세요';
 
-✨ ${pname}
-써보고 나서 진짜 후회했어요 — 왜 진작 안 샀을까 하고요.
+  function assembleCaption({ hook, benefit, cta, hashtags }) {
+    const parts = [AD_DISCLOSURE, '', hook];
+    if (benefit)  parts.push('', benefit);
+    if (cta)      parts.push('', cta);
+    if (hashtags) parts.push('', hashtags);
+    return parts.join('\n');
+  }
 
-📌 프로필 링크에서 최저가 확인하세요
-👉 https://link.inpock.co.kr/kyh498601
+  document.getElementById('caption-insta').textContent = assembleCaption({
+    hook: '이런 거 왜 이제야 알았지… 😮',
+    benefit: `✨ ${pname}\n써보고 나서 진짜 후회했어요 — 왜 진작 안 샀을까 하고요.`,
+    cta: `📌 프로필 링크에서 가격 확인하기\n👉 https://link.inpock.co.kr/kyh498601`,
+    hashtags: `#광고 #유료광고 #쿠팡파트너스 #생활꿀템 #꿀템추천${catHashtag} #쿠팡추천 #생활용품추천 #꿀딜 #특가템 #생활꿀템연구소 #실사용후기 #강추템 #꿀템발견 #홈리빙 #꿀팁 #추천템 #가성비템 #쇼핑추천 #일상템 #핫딜 #오늘의쇼핑 #쿠팡핫딜 #꿀아이템 #생활필수품 #실구매후기 #써보니좋아 #득템 #쇼핑스타그램 #오늘의추천`,
+  });
 
-#광고 #유료광고 #쿠팡파트너스 #생활꿀템 #꿀템추천 #${cat} #쿠팡추천 #생활용품추천 #꿀딜 #특가템 #생활꿀템연구소 #실사용후기 #강추템 #꿀템발견 #생활용품 #홈리빙 #꿀팁 #추천템 #가성비템 #쇼핑추천 #일상템 #핫딜 #오늘의쇼핑 #쿠팡핫딜 #꿀아이템 #생활필수품 #실구매후기 #써보니좋아 #득템 #쇼핑스타그램`;
+  // 유튜브: linktr.ee 우회 없이 쿠팡 간편링크를 설명란에 직접 삽입
+  document.getElementById('caption-youtube').textContent = assembleCaption({
+    hook: catHookYoutube,
+    benefit: `▶ 왜 이 제품을 골랐는지\n▶ 실제로 써보니 어떤지\n▶ 지금 특가 — 놓치면 후회해요`,
+    cta: `🛒 지금 가격 확인하기\n👉 ${partnerLink}`,
+    hashtags: `#생활꿀템연구소 #쿠팡추천 #꿀템리뷰${catHashtag} #꿀딜 #광고`,
+  });
 
-  document.getElementById('caption-youtube').textContent =
-`제목: 역대급 가성비 ${cat} 꿀템 — 솔직 후기
+  document.getElementById('caption-tiktok').textContent = assembleCaption({
+    hook: '이거 안 쓰면 손해 🔥',
+    benefit: `${pname} — 써보고 바로 주변에 뿌렸어요\n지금 특가라 더 빨리 사야 해요`,
+    cta: '🛒 링크 프로필에 있어요!',
+    hashtags: `#꿀템 #생활꿀템${catHashtag} #특가템 #꿀딜 #광고`,
+  });
 
-▶ 왜 이 제품을 골랐는지
-▶ 실제로 써보니 어떤지
-▶ 지금 특가 — 놓치면 후회해요
+  document.getElementById('caption-naver').textContent = assembleCaption({
+    hook: catHookNaver,
+    benefit: `생활꿀템연구소에서 직접 구매 후 테스트한 제품입니다.\n품질·가성비 모두 만족스러웠고, 현재 특가 진행 중이에요.`,
+    cta: '자세한 정보는 프로필 링크에서 확인해 주세요!',
+    hashtags: `#협찬 #광고 #쿠팡파트너스${catHashtag} #생활꿀템 #꿀딜`,
+  });
 
-🛒 최저가 링크: https://link.inpock.co.kr/kyh498601
+  // Facebook은 게시물 본문 링크가 그대로 클릭 가능한 하이퍼링크로 표시되므로
+  // (다른 플랫폼처럼 linktr.ee 프로필 링크로 우회할 필요 없이) 쿠팡 파트너스 링크를 직접 삽입한다.
+  document.getElementById('caption-facebook').textContent = assembleCaption({
+    hook: '이런 거 왜 이제야 알았지… 😮',
+    benefit: `✨ ${pname}\n써보고 나서 진짜 후회했어요 — 왜 진작 안 샀을까 하고요.`,
+    cta: `🛒 지금 가격 확인하기\n👉 ${partnerLink}`,
+    hashtags: `#광고 #유료광고 #쿠팡파트너스 #생활꿀템 #꿀템추천${catHashtag} #쿠팡추천 #생활꿀템연구소`,
+  });
+}
 
-#생활꿀템연구소 #쿠팡추천 #꿀템리뷰 #${cat} #꿀딜 #광고`;
-
-  document.getElementById('caption-tiktok').textContent =
-`이거 안 쓰면 손해 🔥
-
-${pname} — 써보고 바로 주변에 뿌렸어요
-지금 특가라 더 빨리 사야 해요
-
-🛒 링크 프로필에 있어요!
-
-#꿀템 #생활꿀템 #${cat} #특가템 #꿀딜 #광고`;
-
-  document.getElementById('caption-naver').textContent =
-`[${cat} 추천] ${pname} 직접 써봤어요!
-
-생활꿀템연구소에서 직접 구매 후 테스트한 제품입니다.
-품질·가성비 모두 만족스러웠고, 현재 특가 진행 중이에요.
-자세한 정보는 프로필 링크에서 확인해 주세요!
-
-#협찬 #광고 #쿠팡파트너스 #${cat} #생활꿀템 #꿀딜`;
+// 카피는 이제 비동기로 생성되므로(STEP2 참고), fillResults()를 호출한다고 해서
+// state.slides가 즉시 채워지지 않는다. 카피 생성이 아직 안 끝난 채로 STEP3 이후
+// 화면에 진입한 경우(예: URL 직접 이동), 조용히 빈 카피로 진행하지 않고 막는다.
+function ensureSlidesReady() {
+  if (state.slides && state.slides.length) return true;
+  showToast('⚠️ 카피가 아직 생성되지 않았습니다. STEP 1부터 다시 진행해주세요.');
+  return false;
 }
 
 // ============================================================
 // PNG DOWNLOAD  ← server.py /generate-png 전용
 // ============================================================
+// STEP3 "썸네일 카피 A/B 선택" 카드에 렌더링된 실제 문구를 그대로 가져온다(<br> → 줄바꿈).
+// state.thumbnailA/B(또는 폴백)를 다시 계산하지 않고 DOM에 이미 표시된 값을 읽어, 화면에
+// 보이는 문구와 서버로 전송되는 문구가 항상 일치하도록 한다.
+function getAbPlainText(elId) {
+  const html = document.getElementById(elId).innerHTML;
+  return html.replace(/<br\s*\/?>/gi, '\n').trim();
+}
+
 async function downloadPNG() {
-  if (!state.slides || !state.slides.length) fillResults();
+  if (!ensureSlidesReady()) return;
   const btn = document.getElementById('btn-download-png');
   btn.disabled = true;
   btn.textContent = 'PNG 생성 중...';
   try {
+    // 버그 수정(2026-07-06): 이전에는 abChoice가 요청 body에 아예 실리지 않아
+    // B안을 선택해도 PNG 1번 슬라이드에는 항상 SLIDE_COPY 기본 헤드라인이 나갔다.
+    const abHeadline = getAbPlainText(state.abChoice === 'B' ? 'abBText' : 'abAText');
     const response = await fetch('/generate-png', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -1398,6 +1852,8 @@ async function downloadPNG() {
         images:      state.productImages.map(i => i.b64 || i.url),
         productName: state.productName,
         category:    state.category,
+        abChoice:    state.abChoice,
+        abHeadline,
       }),
     });
     if (!response.ok) throw new Error(await response.text());
@@ -1411,7 +1867,7 @@ async function downloadPNG() {
     alert('PNG 생성 실패: ' + e.message);
   } finally {
     btn.disabled = false;
-    btn.textContent = '🖼️ PNG 10장 다운로드';
+    btn.textContent = '🖼️ PNG 7장 다운로드';
   }
 }
 
@@ -1490,7 +1946,7 @@ function downloadThumbnail(variant) {
 // SRT DOWNLOAD  ← server.py /generate-srt 전용
 // ============================================================
 async function downloadSRT() {
-  if (!state.slides || !state.slides.length) fillResults();
+  if (!ensureSlidesReady()) return;
   const btn = document.getElementById('btn-download-srt');
   btn.disabled = true;
   btn.textContent = 'SRT 생성 중...';
@@ -1498,7 +1954,7 @@ async function downloadSRT() {
     const response = await fetch('/generate-srt', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ slides: state.slides, productName: state.productName }),
+      body: JSON.stringify({ slides: state.slides, productName: state.productName, category: state.category }),
     });
     if (!response.ok) throw new Error(await response.text());
     const blob = await response.blob();
@@ -1570,7 +2026,7 @@ function confirmMP4()     { showToast('✅ MP4 생성 확인됨!', 'success'); }
 // STEP NAV
 // ============================================================
 function goToStep(n) {
-  for (let i = 1; i <= 7; i++) {
+  for (let i = 0; i <= 7; i++) {
     const s = document.getElementById(`step${i}`);
     if (s) s.classList.toggle('active', i === n);
     const dot = document.getElementById(`dot${i}`);
@@ -1598,21 +2054,27 @@ function switchTab(e, name) {
 // NEW PRODUCT
 // ============================================================
 function newProduct() {
+  if (_copyPollTimer) { clearInterval(_copyPollTimer); _copyPollTimer = null; }
   clearSavedState();
-  Object.assign(state, { productName:'', partnerLink:'', category:'', platforms:[], productImages:[], reviewImages:[], abChoice:null, currentStep:1, slides:[] });
+  Object.assign(state, { productName:'', partnerLink:'', category:'', platforms:[], productImages:[], reviewImages:[], abChoice:null, currentStep:0, slides:[], thumbnailA:'', thumbnailB:'', pendingCopyRequestId:null, collectedProducts:[] });
   document.getElementById('productName').value = '';
   document.getElementById('partnerLink').value = '';
+  document.getElementById('yt-title').value = '';
+  document.getElementById('yt-title-count').textContent = '0';
+  document.getElementById('yt-desc').value = '';
+  document.getElementById('yt-tags').value = '';
   document.querySelectorAll('.btn-toggle').forEach(b => b.classList.remove('selected'));
   document.getElementById('productPreview').innerHTML = '';
   document.getElementById('reviewPreview').innerHTML = '';
-  for (let i = 1; i <= 6; i++) {
-    const el = document.getElementById(`psi${i}`);
-    el.className = 'pipeline-step-icon';
-    el.textContent = ['📋','🔍','💡','🧠','✍️','🎨'][i-1];
-  }
+  const collectUrlsEl = document.getElementById('collectUrls');
+  if (collectUrlsEl) collectUrlsEl.value = '';
+  const collectResultsCard = document.getElementById('collect-results-card');
+  if (collectResultsCard) collectResultsCard.style.display = 'none';
+  const collectResultsEl = document.getElementById('collectResults');
+  if (collectResultsEl) collectResultsEl.innerHTML = '';
   document.getElementById('progressBar').style.width = '0%';
   document.getElementById('progressLabel').textContent = '처리 중...';
-  updateChecklist(); goToStep(1);
+  updateChecklist(); goToStep(0);
   showToast('✅ 새 제품 작업을 시작합니다', 'success');
 }
 
@@ -1647,7 +2109,10 @@ async function generateBGM(excludeBgm = null) {
       body: JSON.stringify({ bgmVolume: vol, excludeBgm }),
     });
     if (!response.ok) throw new Error(await response.text());
-    const bgmName = response.headers.get('X-BGM-Name') || '';
+    const bgmName   = response.headers.get('X-BGM-Name') || '';
+    // 2026-07-06: 어떤 영상(mtime)에 BGM을 섞었는지 항상 보여줘서, 렌더링을 깜빡 잊고
+    // 이전 영상에 BGM을 추가하는 걸 사용자가 바로 알아챌 수 있게 한다.
+    const srcMtime  = response.headers.get('X-Source-Video-Mtime');
     const blob    = await response.blob();
     if (_bgmVideoUrl) URL.revokeObjectURL(_bgmVideoUrl);
     _bgmVideoUrl = URL.createObjectURL(blob);
@@ -1658,7 +2123,8 @@ async function generateBGM(excludeBgm = null) {
     }
     document.getElementById('bgm-result').style.display = 'flex';
     document.getElementById('btn-step4-next').style.display = 'block';
-    status.textContent = `✅ 완료 · output_with_bgm.mp4 (${(blob.size/1024/1024).toFixed(1)}MB)`;
+    const srcLabel = srcMtime ? ` · 원본 영상 렌더링: ${new Date(srcMtime).toLocaleString('ko-KR')}` : '';
+    status.textContent = `✅ 완료 · output_with_bgm.mp4 (${(blob.size/1024/1024).toFixed(1)}MB)${srcLabel}`;
     showToast('✅ BGM 합산 완료', 'success');
   } catch(e) {
     status.textContent = '❌ 실패: ' + e.message;
@@ -1730,13 +2196,13 @@ async function uploadBGM(e) {
 let _ttsAudioUrl = null;
 
 async function generateTTS() {
-  if (!state.slides || !state.slides.length) fillResults();
+  if (!ensureSlidesReady()) return;
   const btn    = document.getElementById('btn-generate-tts');
   const status = document.getElementById('tts-status');
   btn.disabled = true;
   btn.textContent = '🎙️ 생성 중...';
   document.getElementById('tts-result').style.display = 'none';
-  status.textContent = '⏳ Gemini TTS 요청 중... (10~30초 소요)';
+  status.textContent = '⏳ Typecast TTS 요청 중... (10~30초 소요)';
   try {
     const voice    = document.getElementById('ttsVoice').value;
     const response = await fetch('/generate-tts', {
@@ -1745,7 +2211,8 @@ async function generateTTS() {
       body: JSON.stringify({
         slides:      state.slides,
         productName: state.productName,
-        voiceName:   voice,
+        voiceId:     voice,
+        category:    state.category,
       }),
     });
     if (!response.ok) throw new Error(await response.text());
@@ -1769,7 +2236,7 @@ async function generateTTS() {
     alert('TTS 생성 실패: ' + e.message);
   } finally {
     btn.disabled    = false;
-    btn.textContent = '🎙️ 나레이션 생성 (Gemini TTS)';
+    btn.textContent = '🎙️ 나레이션 생성 (Typecast TTS)';
   }
 }
 
@@ -1835,6 +2302,20 @@ function initThumbPicker() {
   if (_selectedThumbnail) selectThumbnail(_selectedThumbnail);
 }
 
+// 안전장치: STEP 7(업로드 실행) 진입 전 썸네일 선택 여부 검증.
+// 기존 goToStep/initUploadStep/initThumbPicker는 그대로 두고, 진입 호출만 이 함수로 감싼다.
+function enterUploadStep() {
+  if (!_selectedThumbnail) {
+    showToast('⚠️ 썸네일을 먼저 선택해주세요', 'error');
+    alert('⚠️ 썸네일을 먼저 선택해주세요\n\nSTEP 6에서 A안 또는 B안 썸네일을 선택한 후 업로드를 진행할 수 있습니다.');
+    goToStep(6);
+    initThumbPicker();
+    return;
+  }
+  goToStep(7);
+  initUploadStep();
+}
+
 function toggleUploadPlatform(btn) {
   btn.classList.toggle('selected');
   const plat = btn.dataset.plat;
@@ -1852,12 +2333,59 @@ function loadReviewVideo() {
   showToast('영상 불러오는 중...', '');
 }
 
+// 카테고리별 보조 검색 키워드 (백엔드 tags 전용 — 캡션 노출용 해시태그와는 별개)
+const YT_TAG_CATEGORY_KEYWORDS = {
+  '화장품':     ['스킨케어', '뷰티템', '피부관리'],
+  '주방용품':   ['주방템', '살림템', '주방꿀템'],
+  '생활가전':   ['가전추천', '생활가전', '가전꿀템'],
+  '자동차용품': ['차량용품', '카템', '자동차꿀템'],
+  '생활용품':   ['생활템', '살림꿀템', '집꾸미기'],
+  '식품':       ['먹거리', '간식추천', '식품꿀템'],
+};
+
+// 유튜브 검색용 백엔드 tags(#yt-tags)를 상품명/카테고리 기반으로 15개 생성한다.
+// 캡션에 노출되는 해시태그(assembleCaption, 6개)와는 완전히 별개의 결과물이다.
+function buildYoutubeTags(pname, cat) {
+  const name = (pname || '생활꿀템').trim();
+  const category = cat || '생활용품';
+
+  const nameTokens = name
+    .replace(/[[\]()]/g, ' ')
+    .split(/\s+/)
+    .filter(t => t.length >= 2 && !/^\d+$/.test(t))
+    .slice(0, 3);
+
+  const candidates = [
+    name,
+    ...nameTokens,
+    category,
+    ...(YT_TAG_CATEGORY_KEYWORDS[category] || []),
+    '생활꿀템연구소', '쿠팡추천', '꿀템추천', '가성비템', '특가',
+    '핫딜', '실사용후기', '쿠팡핫딜', '내돈내산', '광고',
+  ];
+
+  const FILLER = ['오늘의쇼핑', '득템', '쇼핑추천', '추천템', '생활필수품', '가심비', '언박싱', '후기'];
+
+  const seen = new Set();
+  const tags = [];
+  for (const t of candidates) {
+    const clean = (t || '').trim();
+    if (clean && !seen.has(clean)) { seen.add(clean); tags.push(clean); }
+  }
+  let i = 0;
+  while (tags.length < 15 && i < FILLER.length) {
+    const f = FILLER[i++];
+    if (!seen.has(f)) { seen.add(f); tags.push(f); }
+  }
+  return tags.slice(0, 15);
+}
+
 function autoFillUploadInfo() {
   const pname = state.productName || '생활꿀템';
   // 제목 자동
   const titleEl = document.getElementById('yt-title');
   if (!titleEl.value) {
-    titleEl.value = `이거 진짜 대박이에요 — ${pname} 역대급 특가 꿀템 추천`;
+    titleEl.value = `이거 진짜 대박이에요 — ${pname} 지금 특가 꿀템 추천`;
     document.getElementById('yt-title-count').textContent = titleEl.value.length;
   }
   // 설명 자동 (유튜브 캡션에서)
@@ -1865,10 +2393,10 @@ function autoFillUploadInfo() {
   if (!descEl.value) {
     descEl.value = document.getElementById('caption-youtube')?.textContent?.trim() || '';
   }
-  // 태그 자동
+  // 태그 자동 (검색용 백엔드 tags — 15개, 캡션 해시태그와 별개)
   const tagsEl = document.getElementById('yt-tags');
   if (!tagsEl.value) {
-    tagsEl.value = `꿀템, 생활꿀템, ${state.category || '생활용품'}, 쿠팡추천, 특가, 생활꿀템연구소, 광고`;
+    tagsEl.value = buildYoutubeTags(pname, state.category).join(', ');
   }
   showToast('✅ 캡션 내용으로 자동 채움', 'success');
 }
@@ -1885,6 +2413,36 @@ document.addEventListener('DOMContentLoaded', () => {
 // ============================================================
 // STEP 7 — 업로드 실행
 // ============================================================
+
+// 서버(server.py REQUIRED_IG_HASHTAGS)와 동일한 필수 해시태그 — 미리보기·업로드 전 경고용.
+// 실제 전송 캡션에 대한 최종 보강은 서버에서 수행되며, 이건 화면 표시/확인용.
+const REQUIRED_IG_HASHTAGS = ['#광고', '#유료광고', '#쿠팡파트너스'];
+
+function getMissingRequiredHashtags(caption) {
+  return REQUIRED_IG_HASHTAGS.filter(tag => !caption.includes(tag));
+}
+
+// 서버 에러 응답이 JSON({"error":...})이 아니라 text/plain 파이썬 트레이스백으로 올 때도
+// (server.py의 공통 예외 핸들러가 500 응답을 그렇게 보냄) 사람이 읽을 수 있는 메시지를 뽑아낸다.
+function extractErrorMessage(raw) {
+  if (!raw) return '알 수 없는 오류';
+  try {
+    const data = JSON.parse(raw);
+    return data.error || data.message || JSON.stringify(data);
+  } catch {
+    const lines = raw.trim().split('\n');
+    return lines[lines.length - 1] || raw;  // 트레이스백 마지막 줄 = 실제 예외 메시지
+  }
+}
+
+function ensureRequiredHashtagsPreview(caption) {
+  const missing = getMissingRequiredHashtags(caption);
+  if (!missing.length) return caption;
+  const suffix = missing.join(' ');
+  const body = caption.trim();
+  return body ? `${body}\n\n${suffix}` : suffix;
+}
+
 function initUploadStep() {
   // 제목·설명 미리보기 반영
   const title = document.getElementById('yt-title')?.value || '(제목 없음)';
@@ -1912,14 +2470,23 @@ function initUploadStep() {
   // 플랫폼별 카드 표시
   document.getElementById('upload-yt-card').style.display = _uploadPlatforms.has('youtube')   ? '' : 'none';
   document.getElementById('upload-ig-card').style.display = _uploadPlatforms.has('instagram') ? '' : 'none';
+  document.getElementById('upload-fb-card').style.display = _uploadPlatforms.has('facebook')   ? '' : 'none';
   document.getElementById('upload-tt-card').style.display = _uploadPlatforms.has('tiktok')    ? '' : 'none';
 
-  // 인스타·틱톡 캡션 채우기
-  const igText = document.getElementById('caption-insta')?.textContent?.trim() || '';
+  // 인스타 캡션 = STEP 5 인스타 탭 캡션(caption-insta, 링크트리 프로필 링크 + 인스타 전용
+  // 해시태그 30개), 필수 해시태그는 서버가 자동 보강 (실제 전송 값과 동일하게 보이도록
+  // 미리보기에도 같은 로직 적용). yt-desc(STEP 6 "설명")는 YouTube 전용 필드라 여기 쓰면 안 됨.
+  // 페이스북 캡션 = STEP 5 페이스북 탭 캡션 (쿠팡 파트너스 링크가 직접 클릭 가능하게 포함됨)
+  // 틱톡 캡션 = STEP 5 틱톡 탭 캡션 (수동 복사용, 기존 그대로)
+  const igBase = document.getElementById('caption-insta')?.textContent?.trim() || '';
+  const igText = ensureRequiredHashtagsPreview(igBase);
+  const fbText = document.getElementById('caption-facebook')?.textContent?.trim() || '';
   const ttText = document.getElementById('caption-tiktok')?.textContent?.trim() || '';
   const igEl   = document.getElementById('ig-caption-preview');
+  const fbEl   = document.getElementById('fb-caption-preview');
   const ttEl   = document.getElementById('tt-caption-preview');
   if (igEl) igEl.textContent = igText;
+  if (fbEl) fbEl.textContent = fbText;
   if (ttEl) ttEl.textContent = ttText;
 }
 
@@ -1951,13 +2518,15 @@ async function uploadToYouTube() {
   }, 2000);
 
   try {
+    const pinnedComment = document.getElementById('commentTemplate')?.textContent?.trim() || '';
     const r = await fetch('/upload-youtube', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ title, description: desc, tags, privacyStatus: priv, thumbnailVariant: _selectedThumbnail }),
+      body: JSON.stringify({ title, description: desc, tags, privacyStatus: priv, thumbnailVariant: _selectedThumbnail, pinnedComment }),
     });
-    const data = await r.json();
-    if (!r.ok) throw new Error(JSON.stringify(data));
+    const raw = await r.text();
+    if (!r.ok) throw new Error(extractErrorMessage(raw));
+    const data = JSON.parse(raw);
 
     clearInterval(fakeTick);
     progBar.style.width = '100%';
@@ -1971,7 +2540,10 @@ async function uploadToYouTube() {
     const thumbMsg = data.thumbnailUploaded
       ? ` (썸네일 ${data.thumbnailVariant?.toUpperCase()}안 설정 완료)`
       : '';
-    showToast(`✅ YouTube 업로드 완료!${thumbMsg}`, 'success');
+    const commentMsg = data.commentPosted
+      ? ' · 링크 댓글 작성됨 — YouTube Studio에서 핀 고정 해주세요!'
+      : '';
+    showToast(`✅ YouTube 업로드 완료!${thumbMsg}${commentMsg}`, 'success');
   } catch(e) {
     clearInterval(fakeTick);
     progBar.style.width = '0%';
@@ -1981,6 +2553,160 @@ async function uploadToYouTube() {
     btn.disabled    = false;
     btn.textContent = '▶️ YouTube에 업로드';
   }
+}
+
+async function uploadToInstagram() {
+  const btn      = document.getElementById('btn-ig-upload');
+  const status   = document.getElementById('ig-status');
+  const progWrap = document.getElementById('ig-progress-wrap');
+  const progBar  = document.getElementById('ig-progress-bar');
+
+  const caption = document.getElementById('caption-insta')?.textContent?.trim() || '';
+
+  const missingTags = getMissingRequiredHashtags(caption);
+  if (missingTags.length) {
+    const proceed = confirm(
+      `⚠️ 필수 해시태그가 빠져 있습니다: ${missingTags.join(' ')}\n\n` +
+      `업로드 시 서버가 자동으로 캡션 끝에 추가합니다.\n` +
+      `직접 STEP 6 "설명" 필드에 넣고 싶다면 [취소]를 누르고 수정하세요.\n\n` +
+      `그대로 업로드할까요?`
+    );
+    if (!proceed) return;
+  }
+
+  btn.disabled    = true;
+  btn.textContent = '⏳ 업로드 중...';
+  progWrap.style.display = 'block';
+  progBar.style.width    = '10%';
+  document.getElementById('ig-result').style.display = 'none';
+  document.getElementById('ig-fail').style.display   = 'none';
+  status.textContent = '⏳ Drive 업로드 + 릴스 게시 중... (영상 처리 시간에 따라 수 분 소요)';
+
+  // 진행률 가짜 애니메이션 (실제 진행률은 서버 로그에서 확인)
+  let fakeProgress = 10;
+  const fakeTick = setInterval(() => {
+    if (fakeProgress < 90) { fakeProgress += 3; progBar.style.width = fakeProgress + '%'; }
+  }, 3000);
+
+  try {
+    const r = await fetch('/upload-instagram', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ caption }),
+    });
+    const raw = await r.text();
+    if (!r.ok) throw new Error(extractErrorMessage(raw));
+    const data = JSON.parse(raw);
+
+    clearInterval(fakeTick);
+    progBar.style.width = '100%';
+    status.textContent  = '✅ 게시 완료!';
+
+    document.getElementById('ig-result-media-id').textContent = data.mediaId;
+    document.getElementById('ig-result').style.display = 'block';
+    showToast('✅ Instagram 릴스 게시 완료!', 'success');
+  } catch (e) {
+    clearInterval(fakeTick);
+    progBar.style.width = '0%';
+    status.textContent  = '❌ 업로드 실패: ' + e.message;
+    document.getElementById('ig-fail-msg').textContent = e.message;
+    document.getElementById('ig-fail').style.display = 'block';
+    showToast('Instagram 업로드 실패', '');
+  } finally {
+    btn.disabled    = false;
+    btn.textContent = '📸 Instagram에 업로드';
+  }
+}
+
+async function uploadToFacebook() {
+  const btn      = document.getElementById('btn-fb-upload');
+  const status   = document.getElementById('fb-status');
+  const progWrap = document.getElementById('fb-progress-wrap');
+  const progBar  = document.getElementById('fb-progress-bar');
+
+  const caption = document.getElementById('caption-facebook')?.textContent?.trim() || '';
+
+  btn.disabled    = true;
+  btn.textContent = '⏳ 게시 중...';
+  progWrap.style.display = 'block';
+  progBar.style.width    = '10%';
+  document.getElementById('fb-result').style.display = 'none';
+  document.getElementById('fb-fail').style.display   = 'none';
+  status.textContent = '⏳ Drive 업로드 + 페이지 게시 중... (영상 처리 시간에 따라 수 분 소요)';
+
+  // 진행률 가짜 애니메이션 (실제 진행률은 서버 로그에서 확인)
+  let fakeProgress = 10;
+  const fakeTick = setInterval(() => {
+    if (fakeProgress < 90) { fakeProgress += 3; progBar.style.width = fakeProgress + '%'; }
+  }, 3000);
+
+  try {
+    const r = await fetch('/upload-facebook', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ caption }),
+    });
+    const raw = await r.text();
+    if (!r.ok) throw new Error(extractErrorMessage(raw));
+    const data = JSON.parse(raw);
+
+    clearInterval(fakeTick);
+    progBar.style.width = '100%';
+    status.textContent  = '✅ 게시 완료!';
+
+    const link = document.getElementById('fb-result-link');
+    link.href        = data.url;
+    link.textContent = data.url;
+    document.getElementById('fb-result').style.display = 'block';
+    showToast('✅ Facebook 게시 완료!', 'success');
+  } catch (e) {
+    clearInterval(fakeTick);
+    progBar.style.width = '0%';
+    status.textContent  = '❌ 게시 실패: ' + e.message;
+    document.getElementById('fb-fail-msg').textContent = e.message;
+    document.getElementById('fb-fail').style.display = 'block';
+    showToast('Facebook 게시 실패', '');
+  } finally {
+    btn.disabled    = false;
+    btn.textContent = '📘 Facebook에 게시';
+  }
+}
+
+// ============================================================
+// 커뮤니티 게시물 생성  ← /generate-community-post
+// ============================================================
+async function generateCommunityPost() {
+  const btn    = document.getElementById('btn-cp-generate');
+  const result = document.getElementById('cp-result');
+  const title  = document.getElementById('cp-title')?.value?.trim();
+  const url    = document.getElementById('cp-url')?.value?.trim();
+
+  if (!title || !url) { showToast('영상 제목과 URL을 입력해주세요.'); return; }
+
+  btn.disabled    = true;
+  btn.textContent = '⏳ 생성 중...';
+  try {
+    const r = await fetch('/generate-community-post', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title, url }),
+    });
+    const data = await r.json();
+    if (!r.ok) throw new Error(JSON.stringify(data));
+    result.value = data.post;
+    showToast('✅ 게시물 생성 완료', 'success');
+  } catch (e) {
+    showToast('게시물 생성 실패: ' + e.message);
+  } finally {
+    btn.disabled    = false;
+    btn.textContent = '📝 게시물 생성';
+  }
+}
+
+function copyCommunityPost() {
+  const text = document.getElementById('cp-result').value;
+  if (!text) { showToast('먼저 게시물을 생성해주세요.'); return; }
+  navigator.clipboard.writeText(text).then(() => showToast('📋 복사됨', 'success'));
 }
 
 // ============================================================
@@ -2008,7 +2734,11 @@ async function startRender() {
   _renderLogOffset = 0;
 
   try {
-    const r = await fetch('/render-video', { method: 'POST' });
+    const r = await fetch('/render-video', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ platforms: state.platforms }),
+    });
     if (!r.ok) throw new Error(await r.text());
     if (_renderPollTimer) clearInterval(_renderPollTimer);
     _renderPollTimer = setInterval(pollRenderStatus, 800);
@@ -2103,6 +2833,7 @@ function applyStateToUI() {
   document.getElementById('partnerLink').value = state.partnerLink;
   document.querySelectorAll('#categoryGroup .btn-toggle').forEach(b => b.classList.toggle('selected', b.dataset.val === state.category));
   document.querySelectorAll('#platformGroup .btn-toggle').forEach(b => b.classList.toggle('selected', state.platforms.includes(b.dataset.val)));
+  if (state.category) applyDefaultVoiceForCategory(state.category);
   renderPreviews('product');
   renderPreviews('review');
   if (state.abChoice) {
@@ -2111,7 +2842,8 @@ function applyStateToUI() {
     document.getElementById('abSelected').style.display = 'block';
     document.getElementById('abSelectedLabel').textContent = state.abChoice;
   }
-  if (state.currentStep >= 3) fillResults();
+  if (state.currentStep >= 3) fillResults();  // state.slides는 저장된 값 그대로 사용 — 재계산하지 않음
+  if (state.currentStep === 2 && state.pendingCopyRequestId) beginCopyPolling();  // 대기 중이던 요청 폴링 재개
   renderPolicyList();
   updateChecklist();
   goToStep(state.currentStep);
