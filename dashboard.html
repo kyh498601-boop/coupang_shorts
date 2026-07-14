@@ -1990,7 +1990,9 @@ function copyCaption() {
 
 function copyText(id) {
   const text = document.getElementById(id).textContent;
-  navigator.clipboard.writeText(text).then(() => showToast('📋 복사됨', 'success'));
+  navigator.clipboard.writeText(text)
+    .then(() => showToast('📋 복사됨', 'success'))
+    .catch(e => showToast('❌ 복사 실패 — 직접 선택해서 복사해주세요 (' + e.message + ')'));
 }
 
 async function saveDrive() { await _uploadToDrive(['all']); }
@@ -2706,7 +2708,9 @@ async function generateCommunityPost() {
 function copyCommunityPost() {
   const text = document.getElementById('cp-result').value;
   if (!text) { showToast('먼저 게시물을 생성해주세요.'); return; }
-  navigator.clipboard.writeText(text).then(() => showToast('📋 복사됨', 'success'));
+  navigator.clipboard.writeText(text)
+    .then(() => showToast('📋 복사됨', 'success'))
+    .catch(e => showToast('❌ 복사 실패 — 직접 선택해서 복사해주세요 (' + e.message + ')'));
 }
 
 // ============================================================

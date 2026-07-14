@@ -2504,7 +2504,13 @@ class Handler(BaseHTTPRequestHandler):
         rel = path.lstrip("/")
         fp  = BASE_DIR / "dashboard.html" if rel in ("", "dashboard.html") else BASE_DIR / rel
         if fp.exists() and fp.is_file():
-            self._send(200, MIME.get(fp.suffix.lower(), "application/octet-stream"), fp.read_bytes())
+            # dashboard.html/js/css는 자주 고치는 "소스" 파일이라 브라우저가 옛날 버전을
+            # 캐시해서 계속 보여주는 사고(2026-07-14 진단: 고정댓글 링크가 옛날 버전으로
+            # 복사되던 버그의 원인 중 하나 — 탭을 오래 열어두면 fix 이전 DOM이 남아있었음)를
+            # 막기 위해 no-cache를 강제한다. 이미지/영상 등 대용량 미디어는 자주 안 바뀌므로
+            # 그대로 기본 캐시 동작을 둔다.
+            extra = {"Cache-Control": "no-cache"} if fp.suffix.lower() in (".html", ".js", ".css") else None
+            self._send(200, MIME.get(fp.suffix.lower(), "application/octet-stream"), fp.read_bytes(), extra)
         else:
             self._send(404, "text/plain", b"Not Found")
 
