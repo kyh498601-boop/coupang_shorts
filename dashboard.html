@@ -2343,6 +2343,9 @@ const YT_TAG_CATEGORY_KEYWORDS = {
   '자동차용품': ['차량용품', '카템', '자동차꿀템'],
   '생활용품':   ['생활템', '살림꿀템', '집꾸미기'],
   '식품':       ['먹거리', '간식추천', '식품꿀템'],
+  // '기타'는 정의된 카테고리가 아니라 키워드 폭이 넓을 수밖에 없지만, 최소한 빈 배열로
+  // 완전히 빠지는 것보다는 범용 라이프스타일 계열 키워드라도 채워 넣는다(2026-07-14).
+  '기타':       ['라이프스타일템', '만능템', '신박템'],
 };
 
 // 유튜브 검색용 백엔드 tags(#yt-tags)를 상품명/카테고리 기반으로 15개 생성한다.
@@ -2351,11 +2354,25 @@ function buildYoutubeTags(pname, cat) {
   const name = (pname || '생활꿀템').trim();
   const category = cat || '생활용품';
 
-  const nameTokens = name
+  // 숫자로 시작하는 토큰("200ml", "500g", "1+1")은 대부분 용량/수량 표기라 검색
+  // 키워드로 의미가 없고, 마지막 단어 우선 로직에서 진짜 제품유형 단어를 밀어낼 수
+  // 있어(예: "...수분크림 200ml" → "200ml"이 "수분크림"을 밀어냄) 후보에서 제외한다.
+  const allNameTokens = name
     .replace(/[[\]()]/g, ' ')
     .split(/\s+/)
-    .filter(t => t.length >= 2 && !/^\d+$/.test(t))
-    .slice(0, 3);
+    .filter(t => t.length >= 2 && !/^\d/.test(t));
+
+  // 2026-07-14 진단: 앞 3단어만 취하면 "로지텍 코리아 리프트 버티컬 마우스"처럼 실제
+  // 제품유형(마우스)이 뒤쪽에 오는 경우 검색에 가장 중요한 단어가 잘려나갔다. 마지막
+  // 단어(보통 제품유형)를 우선 포함하고, 나머지는 앞에서부터 채워 최대 3개로 제한한다.
+  const nameTokens = [];
+  if (allNameTokens.length) {
+    nameTokens.push(allNameTokens[allNameTokens.length - 1]);
+    for (const t of allNameTokens) {
+      if (nameTokens.length >= 3) break;
+      if (!nameTokens.includes(t)) nameTokens.push(t);
+    }
+  }
 
   const candidates = [
     name,
