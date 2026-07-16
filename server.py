@@ -15,6 +15,11 @@ POST /generate-png  -> JSON {slides, images(base64[]), productName, category}
 2026-07-XX: 카드/뱃지 있던 상단60%+하단40% 고정 레이아웃을 폐기하고, 제품 사진이
 캔버스 전체를 채우는 카드 없는 레이아웃으로 재설계 (render_slide/_render_slide_hero
 참고, _full_bleed_photo_bg 공용 배경 + _tw_outline_text 외곽선 텍스트 직접 배치).
+
+2026-07-16: _full_bleed_photo_bg가 제품 사진을 cover-crop으로만 채우던 방식이,
+영상 변환(9:16) 시 재크롭 + Ken Burns 줌(1.05~1.18)까지 누적되어 제품이 과도하게
+확대/절단되는 문제(필립스 면도기 테스트에서 확인)를 일으켜, 블러 배경(cover-crop)
++ 원본 전경(contain, 잘리지 않음) 2계층 구조로 재설계.
 """
 
 import base64
@@ -105,13 +110,56 @@ def b64_to_pil(data: str) -> Image.Image | None:
 
 
 # ──────────────────────────────────────────────────────────────
-# 카드 없는 공용 배경 — 제품 사진을 캔버스 전체(1080x1350)에 cover로 꽉 채우고,
-# 필요 시 상/하단에 텍스트 가독성 보조용 그라데이션을 얹는다. 카드 패널이 아니라
-# 사진 중앙부는 그대로 노출하고 텍스트가 놓이는 존만 살짝 어둡게 하는 방식 — 옛날
-# '쿠팡파트너스 인기 상품 자동수집 프로그램' 프로젝트(Documents\쿠팡파트너스...\
+# 카드 없는 공용 배경 — 2계층 구조(2026-07-16 재설계).
+#   1) 배경 레이어: 제품 사진을 캔버스 전체(1080x1350)에 cover로 꽉 채우고 가우시안
+#      블러 처리 (제품 원본이 여기서 잘려도 무방 — 어차피 흐려져서 식별 대상이 아님).
+#   2) 전경 레이어: 제품 사진을 자르지 않고(contain) 비율 유지한 채 캔버스 중앙에 배치.
+#      제품이 실제로 보여야 하는 레이어라 여기서는 절대 크롭하지 않는다.
+# 이전에는 배경 하나만 cover-crop으로 채웠는데, 그 결과물을 영상 변환(9:16) 시
+# 재크롭 + Ken Burns 줌(1.05~1.18)까지 누적 적용하면 제품이 과도하게 확대/절단되어
+# 식별 불가능한 수준으로 잘리는 문제가 있었다(필립스 면도기 테스트에서 확인, 2026-07-16).
+# contain 전경 덕분에 제품 전체 실루엣이 항상 PNG 안에 온전히 담기고, 남는 여백은
+# 블러된 배경이 채워 자연스러운 "블러 패딩" 룩이 된다. 텍스트 가독성 보조 그라데이션은
+# 옛날 '쿠팡파트너스 인기 상품 자동수집 프로그램' 프로젝트(Documents\쿠팡파트너스...\
 # shorts_creator\card_generator.py의 make_thumbnail_card())의 하단 그라데이션 기법을
 # 상/하 양쪽에 적용한 것. _render_slide_hero()와 render_slide()가 공유한다.
 # ──────────────────────────────────────────────────────────────
+_BG_BLUR_RADIUS = 45  # 배경 레이어 가우시안 블러 반경(px) — 전경(제품)과 시각적으로 구분되는 정도
+
+# 전경(제품) contain 배치 시 캔버스 꽉 채우지 않고 살짝 인셋(여백)을 두는 비율.
+# 제품 사진에 따라 contain이 세로/가로 중 한쪽을 여백 0으로 캔버스 끝까지 채우는 경우가
+# 있는데(예: 필립스 면도기 테스트 — 세로 483px 원본이 캔버스 세로 1350px에 꽉 맞아 상/하
+# 여백이 0이 됨), 이 상태에서 영상 Ken Burns 줌(최대 1.09, ShoppingShorts.tsx KB_PATTERNS)이
+# 중심 기준으로 확대하면 프레임 가장자리 쪽 4%가량이 밀려나가 제품 꼭대기가 살짝 잘리는
+# 문제가 실측으로 확인됐다(2026-07-16). 그 4.13%(=(1-1/1.09)/2) 여유보다 넉넉하게 12%
+# 인셋을 둬서 어떤 원본 비율이 와도 Ken Burns 최대 줌에서까지 제품 전체가 프레임 안에
+# 남도록 한다.
+_FG_INSET = 0.88
+
+# 전경 contain 계산 전에 원본 사진의 상/하단을 미리 살짝 걷어내는 비율(임시 완화책,
+# 2026-07-16 추가). 업로드되는 제품 사진 중 상단에 "항상 새 날처럼 날카롭게!" 같은
+# 인포그래픽성 문구가 이미 박혀있는 경우가 있는데, cover-crop 시절엔 이 부분이 잘려서
+# 안 보였지만 contain으로 바뀌면서 전체가 노출되어 새로 그리는 헤드라인/본문 텍스트와
+# 겹치는 문제가 실제 슬라이드(필립스 휴대용 면도기 슬라이드6)에서 확인됐다. 원본에서
+# 문구가 있을 가능성이 높은 상/하단 일부를 contain 계산 전에 미리 잘라내는 방식으로
+# 대응한다 — 완벽한 대응은 아니고(문구 위치를 추정만 함) 정확한 해결은 추후 OCR 기반
+# 텍스트 위치 자동 감지로 업그레이드 가능(이번 스코프 아님). 세로로 긴 제품처럼 사진
+# 상/하단 끝까지 제품이 걸쳐 있으면 이 크롭으로 제품 일부가 함께 잘릴 수 있어, 비율을
+# 보수적으로 작게 잡는다. _FG_INSET(레터박스 여백)과는 별개 단계 — 이 크롭이 먼저
+# 적용된 뒤, 그 결과에 대해 contain + _FG_INSET이 계산된다.
+# 2026-07-16 실측: 상단 13%는 실제 슬라이드6 인포그래픽 문구(필립스 휴대용 면도기)는
+# 깔끔히 지웠지만, 세로로 긴 제품(필립스 PQ206, 회전날이 원본 최상단 불과 5~10px
+# 아래에서 시작하는 케이스)에서는 회전날 윗부분이 실제로 잘리는 게 확인됨. 8%로
+# 낮춰봐도 여전히 회전날이 일부 잘리고, 반대로 인포그래픽 문구는 다 안 지워져 새
+# 헤드라인 뒤로 잔상이 비치는 절충 상태였다 — 하나의 전역 비율로는 두 케이스를 동시에
+# 만족시킬 수 없음을 실측으로 확인(정확한 해결은 OCR 기반 자동 감지, 이번 스코프 아님).
+# 최종적으로 제품 보존을 우선하기로 결정(사용자 결정, 2026-07-16) — 3%로 낮춰 PQ206류
+# 제품은 거의 온전히 보존하고, 인포그래픽성 원본 문구는 일부만 가려질 수 있음(트레이드오프
+# 감수, 심하면 헤드라인 문구가 원본 문구와 겹쳐 보일 수 있음).
+_FG_TOP_CROP_PCT = 0.03
+_FG_BOTTOM_CROP_PCT = 0.05
+
+
 def _full_bleed_photo_bg(product_img: Image.Image | None,
                           top_grad_h: int = 0, top_grad_alpha: int = 0,
                           bottom_grad_h: int = 0, bottom_grad_alpha: int = 0) -> Image.Image:
@@ -123,18 +171,37 @@ def _full_bleed_photo_bg(product_img: Image.Image | None,
         # 완전 불투명하게 만든다. 안 그러면 아래 paste가 crop 자체를 마스크로 써서 투명한
         # 부분에 이 함수 초기 캔버스색(30,30,30, 짙은 회색)이 그대로 비쳐 "검은 여백"처럼
         # 보인다 — rembg로 배경 제거됐거나 투명 패딩이 있는 PNG 원본에서 재현됨.
+        # 배경/전경 레이어 둘 다 이 flatten된 src를 공유해서 투명 PNG여도 양쪽 다 안전하다.
         if src.getextrema()[3][0] < 255:
             flat = Image.new("RGB", src.size, (255, 255, 255))
             flat.paste(src, (0, 0), src)
             src = flat.convert("RGBA")
         sw, sh = src.size
-        scale = max(W / sw, H / sh)
-        dw, dh = int(sw * scale), int(sh * scale)
-        cover = src.resize((dw, dh), Image.LANCZOS)
-        cx = (dw - W) // 2
-        cy = (dh - H) // 2
-        crop = cover.crop((cx, cy, cx + W, cy + H))
-        bg.paste(crop, (0, 0), crop)
+
+        # 1) 배경 레이어 — cover-crop(캔버스 꽉 채움) + 블러. 여기서 잘리는 건 흐려서 안 보임.
+        scale_cover = max(W / sw, H / sh)
+        cdw, cdh = int(sw * scale_cover), int(sh * scale_cover)
+        cover = src.resize((cdw, cdh), Image.LANCZOS)
+        ccx, ccy = (cdw - W) // 2, (cdh - H) // 2
+        cover_crop = cover.crop((ccx, ccy, ccx + W, ccy + H))
+        blurred = cover_crop.filter(ImageFilter.GaussianBlur(_BG_BLUR_RADIUS))
+        bg.paste(blurred, (0, 0), blurred)
+
+        # 2) 전경 레이어 — contain(비율 유지, 잘리지 않음) + 소폭 인셋, 캔버스 중앙에 배치.
+        # 제품이 실제로 식별되어야 하는 레이어라 크롭하지 않는다. 단, contain 계산 전에
+        # 원본 상/하단 일부를 _FG_TOP_CROP_PCT/_FG_BOTTOM_CROP_PCT만큼 먼저 걷어내
+        # 원본에 박힌 인포그래픽 문구와 새 헤드라인/본문이 겹치는 걸 완화한다.
+        top_cut = int(sh * _FG_TOP_CROP_PCT)
+        bottom_cut = int(sh * _FG_BOTTOM_CROP_PCT)
+        crop_bottom_y = max(top_cut + 1, sh - bottom_cut)  # 극단적으로 작은 원본 대비 가드
+        fg_src = src.crop((0, top_cut, sw, crop_bottom_y))
+        fsw, fsh = fg_src.size
+
+        scale_fit = min(W / fsw, H / fsh) * _FG_INSET
+        fw, fh = max(1, round(fsw * scale_fit)), max(1, round(fsh * scale_fit))
+        fit = fg_src.resize((fw, fh), Image.LANCZOS)
+        fx, fy = (W - fw) // 2, (H - fh) // 2
+        bg.paste(fit, (fx, fy), fit)
 
     if top_grad_h and top_grad_alpha:
         top_grad = Image.new("RGBA", (W, top_grad_h), (0, 0, 0, 0))
