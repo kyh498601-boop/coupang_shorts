@@ -675,9 +675,13 @@ def build_narration(slide: dict, product_name: str, idx: int,
     max_chars = int(sec_per_slide * _CHARS_PER_SEC)  # 보충 문장 추가 여부 판단 전용 (트림에는 더 이상 쓰지 않음)
 
     # 슬롯이 넉넉하고 여백이 있으면 보충 문장 추가 (문장을 자르는 게 아니라 채워서 시간 맞춤)
+    # 2026-07-31: idx % len(supplements) 고정 매핑이면 슬라이드 번호가 같은 모든 상품이
+    # 항상 같은 보충 문장을 받는다(예: 7번=idx6은 항상 "진짜 대박이에요."). product_name+idx를
+    # 시드로 쓰는 random.Random으로 바꿔 상품별로 달라지게 하되, 같은 상품(=같은 requestId
+    # 처리 중 재호출)이면 항상 같은 결과가 나오도록 재현성을 유지한다.
     if sec_per_slide >= 4.0 and len(narration) < max_chars - 8:
         supplements = _SUPPLEMENTS_FOOD if is_food else _SUPPLEMENTS
-        supplement  = supplements[idx % len(supplements)]
+        supplement  = random.Random(f"{product_name}:{idx}").choice(supplements)
         candidate   = narration + " " + supplement
         if len(candidate) <= max_chars:
             narration = candidate
