@@ -548,6 +548,10 @@ _OUTRO_BANNED = (
 )
 
 
+# 체감·평가 어미 (스킬 outro 규칙: '~이에요/예요' 객관 서술로). 특정 문구가 아니라 문장 끝의 어미를 걸러낸다.
+_OUTRO_FEEL_ENDING = re.compile(r"(편해요|편하죠|편하네요|편합니다|좋아요|좋죠|좋네요|좋습니다|좋겠어요)[\s.!?~]*$")
+
+
 def _valid_outro(text) -> str:
     """slides[].outro 검증. 규칙에 맞으면 정리된 문장을, 아니면 ""를 반환(호출부가 풀로 폴백)."""
     if not isinstance(text, str):
@@ -556,6 +560,8 @@ def _valid_outro(text) -> str:
     if not t or len(t) > _OUTRO_MAX_CHARS or "\n" in text.strip():
         return ""
     if any(b in t for b in (*_OUTRO_BANNED, *_PROHIBITED_WORD_MAP)):   # 후자: 절대적/최상급 표현 (호출 시점에 정의됨)
+        return ""
+    if _OUTRO_FEEL_ENDING.search(t):
         return ""
     return t
 
