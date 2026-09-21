@@ -2212,7 +2212,7 @@ def handle_request_copy(body: bytes) -> bytes:
 # 다시 점검해야 한다 — community_post_helper.py의 ANTHROPIC_API_KEY 사용처럼
 # .env에만 추가해도 이 서버 프로세스의 os.environ에 노출되면 subprocess가 그대로
 # 상속한다.
-CLAUDE_CLI_TIMEOUT_SEC = 300  # claude -p는 내장 타임아웃이 없어 여기서 강제 종료한다.
+CLAUDE_CLI_TIMEOUT_SEC = 600  # claude -p는 내장 타임아웃이 없어 여기서 강제 종료한다. (2026-09-21: 근거 기록·앵글 로테이션 규칙으로 300초를 넘겨 타임아웃 -> 600초)
 
 _copy_jobs_lock = _threading.Lock()
 _copy_jobs: dict = {}  # requestId -> {"status": "processing"|"failed", "startedAt": float, "error": str|None, "proc": Popen|None}

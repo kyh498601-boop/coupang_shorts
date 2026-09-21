@@ -425,7 +425,7 @@ textarea.form-input{height:auto;padding:10px 14px;resize:vertical}
     <div class="card-body">
       <p style="font-size:13px;color:var(--g600);line-height:1.6">
         제품 정보·이미지·상품평 캡처를 저장했습니다. <strong>Claude Code가 자동으로</strong> 이 요청을
-        읽고 실제 제품 특징과 상품평 캡처 내용을 반영해 슬라이드 7장 카피를 작성합니다(최대 5분).<br>
+        읽고 실제 제품 특징과 상품평 캡처 내용을 반영해 슬라이드 7장 카피를 작성합니다(최대 10분).<br>
         자동 처리가 실패하면 아래에 안내가 표시되고, 그때는 Claude Code 세션에 직접
         "pending 요청 처리해줘"라고 요청하는 수동 방식으로도 이어서 진행할 수 있습니다.
       </p>
@@ -1595,7 +1595,7 @@ function beginCopyPolling() {
 
 // 2026-07-09(3차): 헤드리스 자동 트리거 추가로 pending(대기, 자동실행 시작 전 극히
 // 짧은 순간) / processing(자동 처리 중) / done(완료) / failed(자동 처리 실패 —
-// claude CLI 없음/5분 타임아웃/completed 파일 미생성) 4가지 상태를 구분해서 보여준다.
+// claude CLI 없음/10분 타임아웃/completed 파일 미생성) 4가지 상태를 구분해서 보여준다.
 // failed여도 pending 파일은 서버가 지우지 않으므로, 기존 수동 트리거("pending 처리해줘")
 // 로 그대로 이어받을 수 있다 — 그래서 실패 시에도 요청 ID를 화면에 계속 보여준다.
 async function pollCopyStatus() {
@@ -1616,7 +1616,7 @@ async function pollCopyStatus() {
     } else if (d.status === 'processing') {
       _copyPollAttempts++;
       bar.style.width = Math.min(15 + _copyPollAttempts * 2, 90) + '%';
-      lbl.textContent = `🤖 Claude Code가 자동으로 카피를 작성하는 중입니다... (${_copyPollAttempts * 3}초 경과, 최대 5분)`;
+      lbl.textContent = `🤖 Claude Code가 자동으로 카피를 작성하는 중입니다... (${_copyPollAttempts * 3}초 경과, 최대 10분)`;
     } else if (d.status === 'pending') {
       _copyPollAttempts++;
       lbl.textContent = `카피 생성 대기 중... (${_copyPollAttempts * 3}초 경과) — 자동 처리가 곧 시작되지 않으면 수동으로 "pending 요청 처리해줘"라고 요청해주세요`;
