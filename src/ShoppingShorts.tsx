@@ -15,7 +15,12 @@ const { fontFamily } = loadFont();
 export const FPS = 30;
 export const SLIDE_COUNT = 7; // 2026-07-06: 10장 → 7장 구조로 재작성 (지침 STEP5 참조)
 export const SLIDE_DURATION_FRAMES = 90; // 3s × 30fps (7장×3초=21초 목표)
-const TRANSITION_FRAMES = 20;
+// 컷 경계 앞뒤로 TRANSITION_FRAMES/2 프레임씩(총 12프레임 = 0.4초) 두 슬라이드가 겹치는 크로스페이드 구간.
+// 예전에는 나가는 슬라이드 마지막 20프레임에만 검정/흰색 오버레이를 깔아서 "어두워짐 → 다시 밝아짐 →
+// 갑자기 컷"으로 보였다 (2026-09-21 프레임 분석). 지금은 들어오는 슬라이드가 나가는 슬라이드 위에서
+// 나타난다 — 슬라이드 시작/끝 타이밍(자막·나레이션 경계)은 그대로다.
+const TRANSITION_FRAMES = 12;
+const TRANSITION_HALF = TRANSITION_FRAMES / 2;
 const BRAND_COLOR = "#2E8B57";
 
 // ── Ken Burns 패턴 4가지 (slideIndex % 4 로 반복) ──────────────────────────
@@ -40,17 +45,40 @@ const KB_PATTERNS: [number, number, number, number, number, number][] = [
   [1.06, 1.0,   0,  0,   0,   0],  // 3: 줌아웃 + 중앙 고정
 ];
 
+// ── 전환 효과 3가지 (경계 i→i+1은 TRANSITION_TYPES[i % 3]) ─────────────────────
+// 들어오는 슬라이드는 나가는 슬라이드 "위"에 그려지고 앞 TRANSITION_FRAMES 동안 나타난다.
+//   fade  : 들어오는 쪽 opacity 0→1 (크로스페이드)
+//   zoom  : 나가는 쪽 1→1.12배로 확대되는 동안, 들어오는 쪽이 1.08→1.0배로 안착하며 나타남
+//   slide : 들어오는 쪽이 위에서 아래로 밀고 내려와 나가는 슬라이드를 덮음
+// 나가는 슬라이드는 zoom일 때만 뒤 TRANSITION_FRAMES 동안 확대되고, 나머지는 그대로 아래에 깔려 있다.
+// 배율은 항상 1 이상이라 검은 테두리가 비치지 않는다.
+type TransitionType = "fade" | "zoom" | "slide";
+const TRANSITION_TYPES: TransitionType[] = ["fade", "zoom", "slide"];
+const TRANSITION_EASE = Easing.bezier(0.4, 0, 0.2, 1);
+
 interface SlideProps {
   src: string;
   slideIndex: number;
-  slideDuration: number;
+  slideDuration: number;          // 앞뒤 겹침 구간을 포함한 이 슬라이드의 총 프레임 수
+  enterType?: TransitionType;     // 앞 슬라이드에서 넘어올 때의 전환 (첫 슬라이드는 없음)
+  exitType?: TransitionType;      // 다음 슬라이드로 넘어갈 때의 전환 (마지막 슬라이드는 없음)
 }
 
-const KenBurnsSlide: React.FC<SlideProps> = ({ src, slideIndex, slideDuration }) => {
+const KenBurnsSlide: React.FC<SlideProps> = ({ src, slideIndex, slideDuration, enterType, exitType }) => {
   const frame = useCurrentFrame();
   const [sFrom, sTo, pxFrom, pxTo, pyFrom, pyTo] = KB_PATTERNS[slideIndex % 4];
 
   const ease = Easing.bezier(0.25, 0.46, 0.45, 0.94);
+
+  const clamp = { extrapolateLeft: "clamp", extrapolateRight: "clamp", easing: TRANSITION_EASE } as const;
+  const tIn  = enterType ? interpolate(frame, [0, TRANSITION_FRAMES], [0, 1], clamp) : 1;
+  const tOut = exitType
+    ? interpolate(frame, [slideDuration - TRANSITION_FRAMES, slideDuration], [0, 1], clamp)
+    : 0;
+  const opacity = enterType === "fade" || enterType === "zoom" ? tIn : 1;
+  const transY  = enterType === "slide" ? -100 * (1 - tIn) : 0;
+  const transScale =
+    (enterType === "zoom" ? 1.08 - 0.08 * tIn : 1) * (exitType === "zoom" ? 1 + 0.12 * tOut : 1);
 
   const scale = interpolate(frame, [0, slideDuration], [sFrom, sTo], {
     extrapolateLeft: "clamp", extrapolateRight: "clamp", easing: ease,
@@ -63,67 +91,26 @@ const KenBurnsSlide: React.FC<SlideProps> = ({ src, slideIndex, slideDuration })
   });
 
   return (
-    <AbsoluteFill style={{ overflow: "hidden", backgroundColor: "#000" }}>
-      <Img
-        src={staticFile(src)}
-        style={{
-          width: "100%",
-          height: "100%",
-          objectFit: "cover",
-          transform: `scale(${scale}) translate(${panX}%, ${panY}%)`,
-          transformOrigin: "center center",
-        }}
-      />
-    </AbsoluteFill>
-  );
-};
-
-// ── 전환 효과 3가지 (slideIndex % 3 로 번갈아) ────────────────────────────
-type TransitionType = "fade" | "zoom" | "slide";
-
-interface TransitionOverlayProps {
-  progress: number;
-  type: TransitionType;
-}
-
-const TransitionOverlay: React.FC<TransitionOverlayProps> = ({ progress, type }) => {
-  if (type === "fade") {
-    // 블랙 페이드
-    const opacity = interpolate(progress, [0, 0.5, 1], [0, 1, 0], {
-      easing: Easing.ease,
-      extrapolateLeft: "clamp", extrapolateRight: "clamp",
-    });
-    return <AbsoluteFill style={{ backgroundColor: "#000", opacity }} />;
-  }
-
-  if (type === "zoom") {
-    // 화이트 줌 플래시
-    const scale = interpolate(progress, [0, 0.5, 1], [1, 1.08, 1], {
-      easing: Easing.bezier(0.25, 0.46, 0.45, 0.94),
-      extrapolateLeft: "clamp", extrapolateRight: "clamp",
-    });
-    const opacity = interpolate(progress, [0, 0.25, 0.75, 1], [0, 0.7, 0.7, 0], {
-      extrapolateLeft: "clamp", extrapolateRight: "clamp",
-    });
-    return (
-      <AbsoluteFill
-        style={{ backgroundColor: "#fff", opacity, transform: `scale(${scale})` }}
-      />
-    );
-  }
-
-  // slide — 위에서 아래로 검정 커튼이 내려왔다 올라감
-  const translateY = interpolate(progress, [0, 0.5, 1], [-100, 0, 100], {
-    easing: Easing.bezier(0.4, 0, 0.2, 1),
-    extrapolateLeft: "clamp", extrapolateRight: "clamp",
-  });
-  return (
     <AbsoluteFill
       style={{
-        backgroundColor: "#111",
-        transform: `translateY(${translateY}%)`,
+        opacity,
+        transform: `translateY(${transY}%) scale(${transScale})`,
+        transformOrigin: "center center",
       }}
-    />
+    >
+      <AbsoluteFill style={{ overflow: "hidden", backgroundColor: "#000" }}>
+        <Img
+          src={staticFile(src)}
+          style={{
+            width: "100%",
+            height: "100%",
+            objectFit: "cover",
+            transform: `scale(${scale}) translate(${panX}%, ${panY}%)`,
+            transformOrigin: "center center",
+          }}
+        />
+      </AbsoluteFill>
+    </AbsoluteFill>
   );
 };
 
@@ -366,8 +353,6 @@ export interface ShoppingProps {
   platform?: string;  // CTA 슬라이드(9~10번) 링크 안내 문구 분기용 (예: "유튜브", "페이스북")
 }
 
-const TRANSITION_TYPES: TransitionType[] = ["fade", "zoom", "slide"];
-
 export const ShoppingShorts: React.FC<ShoppingProps> = ({
   images = [],
   durationPerSlideFrames = SLIDE_DURATION_FRAMES,
@@ -375,8 +360,6 @@ export const ShoppingShorts: React.FC<ShoppingProps> = ({
   durationPerSlideFramesArr,
   platform,
 }) => {
-  const frame = useCurrentFrame();
-
   // durationPerSlideFramesArr(실제 음성 길이 비례)가 있고 슬라이드 수와 맞으면 그걸 쓰고,
   // 없으면 기존처럼 균등분배(durationPerSlideFrames)로 폴백 — 기존 동작 100% 유지.
   const useVariableTiming =
@@ -391,54 +374,45 @@ export const ShoppingShorts: React.FC<ShoppingProps> = ({
 
   return (
     <AbsoluteFill style={{ backgroundColor: "#000" }}>
+      {/* Ken Burns 슬라이드 — 컷 경계 앞뒤로 TRANSITION_HALF 프레임씩 겹쳐 그려 크로스페이드.
+          나중 슬라이드가 위에 그려지므로 들어오는 슬라이드가 나가는 슬라이드 위에서 나타난다. */}
       {images.map((src, i) => {
-        const slideDur = slideDurations[i];
-        const slideStart = slideStarts[i];
-        const slideEnd = slideStart + slideDur;
-        // 슬라이드가 짧아도 전환 효과가 슬라이드 시작 이전으로 넘어가지 않도록 클램프
-        const transitionStart = Math.max(slideStart, slideEnd - TRANSITION_FRAMES);
-        const transitionType = TRANSITION_TYPES[i % 3];
-
+        const pre  = i > 0 ? TRANSITION_HALF : 0;
+        const post = i < images.length - 1 ? TRANSITION_HALF : 0;
+        const dur  = slideDurations[i] + pre + post;
         return (
-          <React.Fragment key={src + i}>
-            {/* Ken Burns 슬라이드 */}
-            <Sequence from={slideStart} durationInFrames={slideDur}>
-              <KenBurnsSlide src={src} slideIndex={i} slideDuration={slideDur} />
-            </Sequence>
-
-            {/* 슬라이드 진행 배지("1/7" 등)는 2026-07-06 완전 삭제됨 (PNG 생성 로직과 동일하게 제거) */}
-
-            {/* 자막 (나레이션 텍스트) — 화면 중하단, BrandBar 위 빈 공간 */}
-            {captions[i] && (
-              <Sequence from={slideStart} durationInFrames={slideDur}>
-                <Caption text={captions[i]} />
-              </Sequence>
-            )}
-
-            {/* CTA 링크 안내 오버레이 — 9~10번 슬라이드(마지막 2장)에만 표시 */}
-            {i >= images.length - 2 && (
-              <Sequence from={slideStart} durationInFrames={slideDur}>
-                <CtaLinkOverlay platform={platform} />
-              </Sequence>
-            )}
-
-            {/* 전환 효과 */}
-            {i < images.length - 1 && (
-              <Sequence from={transitionStart} durationInFrames={TRANSITION_FRAMES}>
-                <TransitionOverlay
-                  progress={interpolate(
-                    frame - transitionStart,
-                    [0, TRANSITION_FRAMES],
-                    [0, 1],
-                    { extrapolateLeft: "clamp", extrapolateRight: "clamp" }
-                  )}
-                  type={transitionType}
-                />
-              </Sequence>
-            )}
-          </React.Fragment>
+          <Sequence key={src + i} from={slideStarts[i] - pre} durationInFrames={dur}>
+            <KenBurnsSlide
+              src={src}
+              slideIndex={i}
+              slideDuration={dur}
+              enterType={i > 0 ? TRANSITION_TYPES[(i - 1) % 3] : undefined}
+              exitType={i < images.length - 1 ? TRANSITION_TYPES[i % 3] : undefined}
+            />
+          </Sequence>
         );
       })}
+
+      {/* 슬라이드 진행 배지("1/7" 등)는 2026-07-06 완전 삭제됨 (PNG 생성 로직과 동일하게 제거) */}
+
+      {/* 자막·CTA는 모든 슬라이드 위에 그린다 — 자막/나레이션 경계는 겹침 구간과 무관하게 원래 컷 시점 */}
+      {images.map((src, i) => (
+        <React.Fragment key={src + i}>
+          {/* 자막 (나레이션 텍스트) — 화면 중하단, BrandBar 위 빈 공간 */}
+          {captions[i] && (
+            <Sequence from={slideStarts[i]} durationInFrames={slideDurations[i]}>
+              <Caption text={captions[i]} />
+            </Sequence>
+          )}
+
+          {/* CTA 링크 안내 오버레이 — 9~10번 슬라이드(마지막 2장)에만 표시 */}
+          {i >= images.length - 2 && (
+            <Sequence from={slideStarts[i]} durationInFrames={slideDurations[i]}>
+              <CtaLinkOverlay platform={platform} />
+            </Sequence>
+          )}
+        </React.Fragment>
+      ))}
 
       <Watermark />
       <BrandBar />

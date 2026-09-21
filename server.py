@@ -457,34 +457,81 @@ _CHARS_PER_SEC = 11.0   # 한국어 TTS 기준 초당 문자 수 (자연 발화 
 # 대신 "먹다/드시다"류 어휘를 쓴다. 나머지 카테고리는 기존 어휘 세트를 그대로 사용한다.
 _FOOD_CATEGORIES = {"식품", "식품_신선"}
 
-# 긴 슬롯(4초 이상)에서 짧은 나레이션을 보완하는 보충 문장
-_SUPPLEMENTS = [
-    "지금 바로 확인해보세요.",
-    "한번 써보시면 알 거예요.",
-    "정말 추천드려요.",
-    "많은 분들이 좋아하세요.",
-    "직접 경험해보시길 바라요.",
-    "놓치지 마세요.",
-    "진짜 대박이에요.",
-    "후회 없을 거예요.",
-    "인증된 제품이에요.",
-    "서두르세요, 특가 곧 끝나요.",
-]
+# 긴 슬롯(4초 이상)에서 짧은 나레이션을 보완하는 보충 문장 — 역할별 풀.
+# 슬라이드 위치에 따라 역할이 정해지고(_supplement_role), 한 영상 안에서는 같은 문장이 두 번 나오지
+# 않게 뽑는다(_pick_supplements). 표시광고 리스크가 있는 과장·보장·인증·근거 없는 인기/긴급성 주장
+# 문구("진짜 대박이에요", "후회 없을 거예요", "인증된 제품이에요", "많은 분들이 좋아하세요",
+# "서두르세요, 특가 곧 끝나요")는 2026-09-21 사용자 결정으로 풀에서 영구 제거했다 —
+# 새 문장을 추가할 때도 최상급·효과 보장·인증/수상 주장·근거 없는 인기/마감 주장·수치는 넣지 말 것.
+# 모든 카테고리 공통 문장
+_SUPP_COMMON = {
+    "궁금증": [
+        "어떤 점이 다른지 볼까요?",
+        "이유가 궁금하시죠?",
+        "하나씩 살펴볼게요.",
+        "어떤 제품인지 알려드릴게요.",
+        "이 부분 눈여겨보세요.",
+        "궁금하셨던 부분이에요.",
+    ],
+    "공감": [
+        "이런 고민 있으셨죠?",
+        "이런 경험 한 번쯤 있으시죠?",
+        "은근히 신경 쓰이는 부분이죠.",
+        "고르기 쉽지 않으셨을 거예요.",
+        "꼼꼼히 따져보고 싶으시죠?",
+    ],
+    "혜택": [
+        "구성을 꼼꼼히 확인해보세요.",
+        "가격도 꼼꼼히 비교해보세요.",
+        "부담 없이 시작하기 좋아요.",
+        "혜택은 링크에서 확인하세요.",
+        "정보는 링크에서 확인하세요.",
+        "정말 추천드려요.",
+    ],
+    "행동유도": [
+        "지금 바로 확인해보세요.",
+        "놓치지 마세요.",
+        "링크에서 확인해보세요.",
+        "관심 있다면 지금 확인하세요.",
+        "저장해두고 비교해보세요.",
+    ],
+}
+# 사용하는 상품(식품 외) 전용 — "써보다/경험하다"류
+_SUPP_USE = {
+    "궁금증": ["한번 써보시면 알 거예요.", "직접 써보면 어떨까요?"],
+    "공감":   ["매일 쓰니 신경 쓰이죠.", "써보기 전엔 망설여지죠."],
+    "혜택":   ["직접 경험해보시길 바라요.", "써보시고 비교해보세요."],
+    "행동유도": ["지금 바로 써보세요.", "일단 한번 써보세요."],
+}
+# 식품 전용 — "먹다/드시다"류 (공통 문장은 음식과 무관한 범용 문구라 그대로 재사용)
+_SUPP_EAT = {
+    "궁금증": ["한번 드셔보면 알 거예요.", "직접 먹어보면 어떨까요?"],
+    "공감":   ["매일 먹으니 신경 쓰이죠.", "먹어보기 전엔 망설여지죠."],
+    "혜택":   ["직접 드셔보시길 바라요.", "드셔보시고 비교해보세요."],
+    "행동유도": ["지금 바로 드셔보세요.", "일단 한번 드셔보세요."],
+}
+_SUPPLEMENTS      = {r: _SUPP_COMMON[r] + _SUPP_USE[r] for r in _SUPP_COMMON}   # 역할당 8개, 총 32개
+_SUPPLEMENTS_FOOD = {r: _SUPP_COMMON[r] + _SUPP_EAT[r] for r in _SUPP_COMMON}
 
-# 식품 전용 보충 문장 — "사용"류(써보다/경험하다) 표현만 "먹다/드시다"류로 교체하고
-# 나머지(추천드려요/좋아하세요 등 음식과 무관한 범용 문구)는 그대로 재사용한다.
-_SUPPLEMENTS_FOOD = [
-    "지금 바로 확인해보세요.",
-    "한번 드셔보면 알 거예요.",
-    "정말 추천드려요.",
-    "많은 분들이 좋아하세요.",
-    "직접 드셔보시길 바라요.",
-    "놓치지 마세요.",
-    "진짜 대박이에요.",
-    "후회 없을 거예요.",
-    "인증된 제품이에요.",
-    "서두르세요, 특가 곧 끝나요.",
-]
+
+def _supplement_role(idx: int, n: int) -> str:
+    """슬라이드 위치 -> 보충 문장 역할: 첫 장 궁금증, 마지막 장 행동유도, 가운데는 공감/혜택 교대."""
+    if idx == 0:
+        return "궁금증"
+    if idx == n - 1:
+        return "행동유도"
+    return ("공감", "혜택")[(idx - 1) % 2]
+
+
+def _pick_supplements(product_name: str, n: int, is_food: bool) -> list:
+    """슬라이드 n장에 붙일 보충 문장을 뽑는다. 역할별 풀을 product_name 시드로 섞어 순서대로 꺼내므로
+    한 영상 안에서 중복이 없고(풀이 역할 간에도 겹치지 않음), 같은 상품이면 항상 같은 결과다.
+    (한 역할이 쓰이는 횟수는 슬라이드 수의 절반 정도 — 표준 7장이면 최대 3회라 풀 8개로 충분)"""
+    pool = _SUPPLEMENTS_FOOD if is_food else _SUPPLEMENTS
+    rng  = random.Random(product_name)
+    deck = {role: rng.sample(lines, len(lines)) for role, lines in pool.items()}
+    return [deck[_supplement_role(i, n)].pop() for i in range(n)]
+
 
 # 슬라이드에 headline/body가 전혀 없을 때만 쓰는 최후 폴백(범용 문구). 2026-07-06까지는
 # 이 배열이 나레이션의 유일한 소스였고 슬라이드 실제 내용(headline/body)과 무관하게
@@ -637,7 +684,7 @@ def _filter_prohibited_words(text: str) -> str:
 
 
 def build_narration(slide: dict, product_name: str, idx: int,
-                    sec_per_slide: float = 2.5, category: str = "") -> str:
+                    sec_per_slide: float = 2.5, category: str = "", supplement: str = "") -> str:
     """슬라이드 나레이션 텍스트를 만든다.
 
     문장을 중간에 잘라내지 않는다(완성 문장 보장) — TTS와 자막이 항상 같은 함수 결과를
@@ -674,15 +721,11 @@ def build_narration(slide: dict, product_name: str, idx: int,
 
     max_chars = int(sec_per_slide * _CHARS_PER_SEC)  # 보충 문장 추가 여부 판단 전용 (트림에는 더 이상 쓰지 않음)
 
-    # 슬롯이 넉넉하고 여백이 있으면 보충 문장 추가 (문장을 자르는 게 아니라 채워서 시간 맞춤)
-    # 2026-07-31: idx % len(supplements) 고정 매핑이면 슬라이드 번호가 같은 모든 상품이
-    # 항상 같은 보충 문장을 받는다(예: 7번=idx6은 항상 "진짜 대박이에요."). product_name+idx를
-    # 시드로 쓰는 random.Random으로 바꿔 상품별로 달라지게 하되, 같은 상품(=같은 requestId
-    # 처리 중 재호출)이면 항상 같은 결과가 나오도록 재현성을 유지한다.
-    if sec_per_slide >= 4.0 and len(narration) < max_chars - 8:
-        supplements = _SUPPLEMENTS_FOOD if is_food else _SUPPLEMENTS
-        supplement  = random.Random(f"{product_name}:{idx}").choice(supplements)
-        candidate   = narration + " " + supplement
+    # 슬롯이 넉넉하고 여백이 있으면 보충 문장 추가 (문장을 자르는 게 아니라 채워서 시간 맞춤).
+    # 보충 문장은 _build_narration_list가 영상 단위로 미리 뽑아(_pick_supplements) 넘겨준다 —
+    # 슬라이드마다 따로 뽑으면 한 영상에서 같은 문장이 반복된다(2026-09-21 확인: "많은 분들이 좋아하세요" 3회).
+    if supplement and sec_per_slide >= 4.0 and len(narration) < max_chars - 8:
+        candidate = narration + " " + supplement
         if len(candidate) <= max_chars:
             narration = candidate
 
@@ -734,7 +777,21 @@ def _invalidate_stale_tts_cache(product_name: str) -> bool:
     return True
 
 
+def _reject_if_rendering(what: str) -> None:
+    """렌더링 중이면 거부한다. TTS/SRT는 output_narration.wav · captions.json · slide_durations.json을
+    덮어쓰는데, 렌더링 중에 하면 영상(자막·컷 타이밍)과 이후 BGM 믹싱에 쓰이는 음성이 서로 다른
+    실행분이 된다 (2026-09-21 로그로 확인). handle_generate_bgm과 같은 방식의 가드."""
+    with _render_lock:
+        if _render_state.get("running"):
+            raise RuntimeError(
+                f"렌더링이 아직 진행 중입니다. 렌더링이 끝난 뒤 {what} 다시 생성해주세요 — "
+                "지금 생성하면 영상 자막·타이밍과 음성이 서로 다른 나레이션이 됩니다."
+            )
+
+
 def handle_generate_srt(body: bytes) -> bytes:
+    _reject_if_rendering("자막을")
+
     payload      = json.loads(body)
     slides       = payload.get("slides", [])
     product_name = payload.get("productName", "")
@@ -847,8 +904,10 @@ def _build_narration_list(slides: list, product_name: str, n_slides: int, sec_pe
     """슬라이드별 순수 나레이션 텍스트(감정 프리픽스 없음) 리스트.
     TTS 본문과 자막(captions.json)이 항상 같은 소스를 쓰도록 이 함수 하나로 통일한다.
     category는 build_narration()의 식품 전용 어휘("먹다/드시다"류) 분기에 쓰인다."""
+    supplements = _pick_supplements(product_name, n_slides, category in _FOOD_CATEGORIES)
     return [
-        build_narration(slides[i] if i < len(slides) else {}, product_name, i, sec_per_slide_for_text, category)
+        build_narration(slides[i] if i < len(slides) else {}, product_name, i, sec_per_slide_for_text, category,
+                        supplements[i])
         for i in range(n_slides)
     ]
 
@@ -958,6 +1017,11 @@ _ATEMPO_SAFE_MAX = 1.15
 
 
 def handle_generate_tts(body: bytes) -> tuple:
+    # 렌더링 중 TTS를 다시 돌리면 output_narration.wav / captions.json / slide_durations.json이
+    # 덮어써져 영상(자막·컷 타이밍)과 이후 BGM 믹싱에 쓰이는 음성이 서로 다른 실행분이 된다
+    # (2026-09-21 로그로 확인). handle_generate_bgm과 같은 방식으로 명시적으로 차단한다.
+    _reject_if_rendering("나레이션을")
+
     payload      = json.loads(body)
     slides       = payload.get("slides", [])
     product_name = payload.get("productName", "")
