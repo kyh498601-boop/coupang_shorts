@@ -1651,7 +1651,7 @@ function cancelCopyRequest() {
   goToStep(1);
 }
 
-// completed JSON({ requestId, slides: [{headline, body}, ...7개] })을 받아
+// completed JSON({ requestId, slides: [{headline, body, outro}, ...7개] })을 받아
 // SLIDE_TEMPLATES의 역할 이름(title)과 매칭해 state.slides를 채운다.
 function applyGeneratedCopy(data) {
   const effectiveCat = resolveFoodCategory(state.category, state.productName);
@@ -1661,6 +1661,8 @@ function applyGeneratedCopy(data) {
     title:    t.title,
     headline: (genSlides[i] && genSlides[i].headline) || '',
     body:     (genSlides[i] && genSlides[i].body) || '',
+    // 슬라이드별 마무리 나레이션(영상 음성/자막 전용, PNG에는 안 나옴). 없으면 서버가 고정 문구 풀로 폴백.
+    outro:    (genSlides[i] && genSlides[i].outro) || '',
   }));
   // thumbnailA/B가 없으면(과거 포맷 등) fillResults()가 슬라이드1 헤드라인으로 폴백한다.
   state.thumbnailA = (data && data.thumbnailA) || '';
@@ -1675,12 +1677,15 @@ function applyGeneratedCopy(data) {
 // 2026-07-06: 10장 → 7장 구조로 재작성 (지침 STEP5 참조). 기존 3+4번/6+7번/9+10번
 // 항목을 각각 통합해 7장으로 축소 — 정보 손실 없이 중복을 줄인다.
 const SLIDE_TEMPLATES = {
-  '화장품':   [{title:'후킹'},{title:'추천 피부타입'},{title:'주요 성분'},{title:'사용감/텍스처'},{title:'전후 효과 & 인증'},{title:'상품평 재가공'},{title:'특가 안내 & CTA'}],
-  '주방용품': [{title:'후킹'},{title:'추천 대상'},{title:'핵심 기능 & 안전성'},{title:'사용법'},{title:'사이즈 & 관리 편의성'},{title:'상품평 재가공'},{title:'특가 안내 & CTA'}],
-  '생활가전': [{title:'후킹'},{title:'추천 대상'},{title:'주요 기능'},{title:'사용 시나리오'},{title:'안전인증 & 설치 편의성'},{title:'상품평 재가공'},{title:'특가 안내 & CTA'}],
-  '자동차용품':[{title:'후킹'},{title:'추천 차량/운전자'},{title:'핵심 기능 & 설치'},{title:'호환 차종/사이즈'},{title:'안전성 & 전후 비교'},{title:'상품평 재가공'},{title:'특가 안내 & CTA'}],
-  '생활용품': [{title:'후킹'},{title:'추천 대상'},{title:'핵심 기능 & 안전성'},{title:'사용법'},{title:'사이즈 & 활용팁'},{title:'상품평 재가공'},{title:'특가 안내 & CTA'}],
-  '식품':     [{title:'후킹'},{title:'추천 대상'},{title:'안전인증 정보'},{title:'맛/식감'},{title:'조리법 & 보관법'},{title:'상품평 재가공'},{title:'특가 안내 & CTA'}],
+  // 2026-09-21: 슬롯 순서·이름을 category-copy-rules SKILL.md 표(후킹|2|3|4|상품평재가공|특가|CTA)에 맞춤.
+  // 이전에는 5번 "전후 효과 & 인증", 6번 "상품평 재가공", 7번 "특가 안내 & CTA"로 라벨링돼 있어
+  // 실제 카피(스킬 순서: 5번 후기, 6번 특가, 7번 CTA)와 STEP3 미리보기 라벨이 어긋났다.
+  '화장품':   [{title:'후킹'},{title:'피부타입 & 성분'},{title:'효능/텍스처'},{title:'전후 효과 & 인증'},{title:'상품평 재가공'},{title:'특가'},{title:'CTA'}],
+  '주방용품': [{title:'후킹'},{title:'추천 대상 & 기능'},{title:'소재/안전 & 사용법'},{title:'용량 & 세척'},{title:'상품평 재가공'},{title:'특가'},{title:'CTA'}],
+  '생활가전': [{title:'후킹'},{title:'추천 대상 & 기능'},{title:'스펙 & 인증'},{title:'사용 시나리오 & 설치'},{title:'상품평 재가공'},{title:'특가'},{title:'CTA'}],
+  '자동차용품':[{title:'후킹'},{title:'차종 & 기능'},{title:'설치법 & 호환'},{title:'안전인증 & 전후 비교'},{title:'상품평 재가공'},{title:'특가'},{title:'CTA'}],
+  '생활용품': [{title:'후킹'},{title:'추천 대상 & 기능'},{title:'소재/안전 & 사용법'},{title:'사이즈 & 활용팁'},{title:'상품평 재가공'},{title:'특가'},{title:'CTA'}],
+  '식품':     [{title:'후킹'},{title:'추천 대상 & 특징'},{title:'원재료/인증 & 맛'},{title:'조리법 & 보관법'},{title:'상품평 재가공'},{title:'특가'},{title:'CTA'}],
   // 2026-07-06: 식품 세분화 — 신선식품(과일/채소/정육 등)은 "조리법" 자체가 성립하지 않아
   // (예: 바나나에 "전자레인지 3분 완성"이 나오는 버그) 별도 템플릿으로 분리.
   // 2026-07-06: 3번 슬라이드 title("핵심 특징 & 안전인증")이 headline("핵심 특징 & 믿을
@@ -1689,7 +1694,7 @@ const SLIDE_TEMPLATES = {
   // 2026-07-06: 5번 슬라이드 title이 headline("보관 팁 & 먹는 법")과 완전히 동일해
   // STEP3 미리보기(`${title} — ${headline}`)에 "보관 팁 & 먹는 법 — 보관 팁 & 먹는 법"처럼
   // 그대로 중복 표시되던 버그 수정 — title만 "신선 보관법 안내"로 교체(headline은 유지).
-  '식품_신선': [{title:'후킹'},{title:'추천 대상'},{title:'안전인증 정보'},{title:'맛/식감'},{title:'신선 보관법 안내'},{title:'상품평 재가공'},{title:'특가 안내 & CTA'}],
+  '식품_신선': [{title:'후킹'},{title:'추천 대상 & 특징'},{title:'원재료/인증 & 맛'},{title:'신선 보관법 안내'},{title:'상품평 재가공'},{title:'특가'},{title:'CTA'}],
 };
 
 // 2026-07-09: SLIDE_COPY(카테고리별 예시 문장 하드코딩 테이블) 완전 삭제.

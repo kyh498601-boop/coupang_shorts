@@ -451,8 +451,6 @@ def _slide_timing(n: int) -> tuple[int, float, float]:
     else:        return 3000, n * 3.0, n * 3.0   # 7장(표준): 슬라이드당 3초, 총 n×3초 (7장=21초)
 
 
-_CHARS_PER_SEC = 11.0   # 한국어 TTS 기준 초당 문자 수 (자연 발화 기준)
-
 # 식품/식품_신선 카테고리 판별 — 이 카테고리일 때만 "사용"류(써보다/사용하다/경험하다) 어휘
 # 대신 "먹다/드시다"류 어휘를 쓴다. 나머지 카테고리는 기존 어휘 세트를 그대로 사용한다.
 _FOOD_CATEGORIES = {"식품", "식품_신선"}
@@ -531,6 +529,33 @@ def _pick_supplements(product_name: str, n: int, is_food: bool) -> list:
     rng  = random.Random(product_name)
     deck = {role: rng.sample(lines, len(lines)) for role, lines in pool.items()}
     return [deck[_supplement_role(i, n)].pop() for i in range(n)]
+
+
+# ── LLM이 슬라이드별로 써준 마무리 나레이션(outro) ─────────────────────────────
+# category-copy-rules 스킬이 headline/body와 함께 completed JSON의 slides[].outro로 써준다. 유효하면 위
+# 고정 풀 대신 이 값을 보충 문장으로 쓰고, 누락/규칙 위반이면 풀로 폴백한다. 스킬 규칙이 1차 방어선이고
+# 아래 검증은 사후 안전망이다 — 이미지 속 글귀나 LLM 오작동으로 이상한 문장이 TTS·자막으로 그대로 나가는 걸
+# 막는 용도라 금지어 목록이 완전하지 않다. 걸리면 고치지 않고 통째로 버린다(폴백).
+_OUTRO_MAX_CHARS = 17   # 스킬 규칙 16자 + 여유 1자
+_OUTRO_BANNED = (
+    # 2026-09-21 풀에서 제거한 표시광고 리스크 문구의 핵심어
+    "대박", "후회", "인증", "많은 분", "특가 곧",
+    # 보장·근거 없는 인기/긴급성 (스킬 "마무리 나레이션" 규칙). 절대적/최상급 표현은 아래
+    # _PROHIBITED_WORD_MAP의 키를 그대로 재사용한다 (_valid_outro 참고)
+    "보장", "무조건", "확실", "반드시", "100%", "완판", "품절", "마감", "선착순", "곧 끝", "다들", "모두가", "완벽",
+)
+
+
+def _valid_outro(text) -> str:
+    """slides[].outro 검증. 규칙에 맞으면 정리된 문장을, 아니면 ""를 반환(호출부가 풀로 폴백)."""
+    if not isinstance(text, str):
+        return ""
+    t = re.sub(r"\s+", " ", text).strip()
+    if not t or len(t) > _OUTRO_MAX_CHARS or "\n" in text.strip():
+        return ""
+    if any(b in t for b in (*_OUTRO_BANNED, *_PROHIBITED_WORD_MAP)):   # 후자: 절대적/최상급 표현 (호출 시점에 정의됨)
+        return ""
+    return t
 
 
 # 슬라이드에 headline/body가 전혀 없을 때만 쓰는 최후 폴백(범용 문구). 2026-07-06까지는
@@ -684,14 +709,15 @@ def _filter_prohibited_words(text: str) -> str:
 
 
 def build_narration(slide: dict, product_name: str, idx: int,
-                    sec_per_slide: float = 2.5, category: str = "", supplement: str = "") -> str:
+                    category: str = "", supplement: str = "") -> str:
     """슬라이드 나레이션 텍스트를 만든다.
 
     문장을 중간에 잘라내지 않는다(완성 문장 보장) — TTS와 자막이 항상 같은 함수 결과를
     공유하므로, 여기서 자르면 음성도 자막도 같이 잘려서 의미가 끊긴 채로 끝난다.
     타이밍 보정은 텍스트 길이가 아니라 atempo(배속) 쪽에서 전담한다.
-    - 짧은 슬롯: 기본 템플릿 그대로(트림 없음)
-    - 긴 슬롯(4s 이상)이고 여유가 있으면: 보충 문장 추가 → 시간을 자연스럽게 채움
+    - 기본: headline 요약 그대로(트림 없음)
+    - supplement가 주어지면 뒤에 붙임 → 시간을 자연스럽게 채움. 어느 슬라이드에 붙일지는
+      호출부가 정한다(_plan_supplements: 1차 TTS가 목표보다 짧을 때 부족한 슬라이드부터 부분 보충)
 
     2026-07-06: 나레이션 소스를 슬라이드 실제 headline/body(_narration_from_slide)로
     우선 사용하도록 변경 — 이전에는 _NARRATION_TEMPLATES[idx] 고정 문구만 써서 카테고리별
@@ -719,15 +745,8 @@ def build_narration(slide: dict, product_name: str, idx: int,
     narration = re.sub(r"^[,.\s~]+", "", narration)          # 문두에 남은 군더더기 정리
     narration = re.sub(r"\s{2,}", " ", narration).strip()
 
-    max_chars = int(sec_per_slide * _CHARS_PER_SEC)  # 보충 문장 추가 여부 판단 전용 (트림에는 더 이상 쓰지 않음)
-
-    # 슬롯이 넉넉하고 여백이 있으면 보충 문장 추가 (문장을 자르는 게 아니라 채워서 시간 맞춤).
-    # 보충 문장은 _build_narration_list가 영상 단위로 미리 뽑아(_pick_supplements) 넘겨준다 —
-    # 슬라이드마다 따로 뽑으면 한 영상에서 같은 문장이 반복된다(2026-09-21 확인: "많은 분들이 좋아하세요" 3회).
-    if supplement and sec_per_slide >= 4.0 and len(narration) < max_chars - 8:
-        candidate = narration + " " + supplement
-        if len(candidate) <= max_chars:
-            narration = candidate
+    if supplement:
+        narration = narration + " " + supplement
 
     narration = _filter_prohibited_words(narration)
     return narration
@@ -811,7 +830,7 @@ def handle_generate_srt(body: bytes) -> bytes:
     cached_durations = _load_json_if_matches(BASE_DIR / "slide_durations.json", n_slides)
 
     narrations = cached_captions if cached_captions is not None else \
-        _build_narration_list(slides, product_name, n_slides, sec_per_slide, category)
+        _build_narration_list(slides, product_name, n_slides, category)
     slide_sec  = cached_durations if cached_durations is not None else [sec_per_slide] * n_slides
 
     timing_src = "실제 음성 길이 비례(slide_durations.json)" if cached_durations is not None else "화면 타이밍 균등 분배"
@@ -899,27 +918,83 @@ def _adjust_wav_speed(wav_path: Path, target_sec: float) -> tuple:
     return wav_path.read_bytes(), actual_sec, ratio
 
 
-def _build_narration_list(slides: list, product_name: str, n_slides: int, sec_per_slide_for_text: float,
-                           category: str = "") -> list:
+def _supplement_texts(slides: list, product_name: str, n_slides: int, category: str = "") -> list:
+    """슬라이드별 보충 문장 후보. 슬라이드의 outro(LLM이 카피와 함께 쓴 마무리 나레이션)가 유효하고 영상 안에서
+    중복이 아니면 그것을, 아니면(누락/규칙 위반/옛 세션 state) 고정 풀(_pick_supplements)에서 채운다.
+    실제로 어느 슬라이드에 붙일지는 _plan_supplements가 정한다."""
+    supplements = _pick_supplements(product_name, n_slides, category in _FOOD_CATEGORIES)
+    used_outros = set()
+    for i in range(n_slides):
+        outro = _valid_outro(slides[i].get("outro")) if i < len(slides) else ""
+        if outro and outro not in used_outros:
+            used_outros.add(outro)
+            supplements[i] = outro
+    print(f"[Narration] 보충 후보: outro {len(used_outros)}/{n_slides}장, 나머지는 고정 풀", flush=True)
+    return supplements
+
+
+def _build_narration_list(slides: list, product_name: str, n_slides: int, category: str = "",
+                           supplements: list = None, supp_idx=()) -> list:
     """슬라이드별 순수 나레이션 텍스트(감정 프리픽스 없음) 리스트.
     TTS 본문과 자막(captions.json)이 항상 같은 소스를 쓰도록 이 함수 하나로 통일한다.
+    supp_idx에 든 슬라이드에만 supplements[i]를 덧붙인다(부분 보충) — 기본은 보충 없음.
     category는 build_narration()의 식품 전용 어휘("먹다/드시다"류) 분기에 쓰인다."""
-    supplements = _pick_supplements(product_name, n_slides, category in _FOOD_CATEGORIES)
+    chosen = set(supp_idx)
     return [
-        build_narration(slides[i] if i < len(slides) else {}, product_name, i, sec_per_slide_for_text, category,
-                        supplements[i])
+        build_narration(slides[i] if i < len(slides) else {}, product_name, i, category,
+                        supplements[i] if i in chosen else "")
         for i in range(n_slides)
     ]
 
 
-def _build_tts_text(slides: list, product_name: str, n_slides: int, sec_per_slide_for_text: float,
-                     category: str = "") -> str:
-    """슬라이드별 나레이션을 빌드해 합친다. sec_per_slide_for_text는 글자 수 산정 전용
-    (화면 표시 길이인 _slide_timing 결과와는 별개 — 재생성 시 대본 길이만 조정하기 위함).
-    톤/감정 지시문은 본문에 섞지 않는다 (TTS에 보낼 때는 prompt 파라미터로 별도 전달 — _call_typecast_tts 참고).
-    """
-    narrations = _build_narration_list(slides, product_name, n_slides, sec_per_slide_for_text, category)
-    return "\n\n".join(narrations)
+def _plan_supplements(base: list, supps: list, actual_sec: float, target_sec: float,
+                      exclude=(), rate: float = None) -> list:
+    """합성 결과(actual_sec)가 목표보다 짧을 때, 보충 문장을 더 붙일 슬라이드를 정한다(부분 보충).
+    글자당 발화 시간(rate, 기본은 평균)으로 슬라이드별 예상 길이를 잡고, 슬롯(목표/슬라이드 수) 대비 부족량이
+    큰 슬라이드부터 하나씩 붙이다가 예상 비율(길이/목표)이 배속 안전범위(_ATEMPO_SAFE_MIN 이상)에 들어오면
+    즉시 멈춘다. 이미 범위 안이거나 목표보다 길면 [] (보충은 늘리는 용도 — 긴 건 atempo 보정 몫).
+    exclude: 이미 붙인 슬라이드. base는 현재 나레이션(이미 붙인 보충 포함)이어도 된다."""
+    if actual_sec / target_sec >= _ATEMPO_SAFE_MIN:
+        return []
+    # 평균 rate는 슬라이드 사이 쉼까지 글자에 나눠 담아 실제 추가 글자당 시간보다 크다(2026-09-21 실측:
+    # 평균 대비 약 60%) — 그래서 첫 시도는 모자라기 쉽고, _fit_narration이 실측 증가분으로 rate를 보정해 다시 시도한다.
+    rate = rate or actual_sec / max(sum(len(t) for t in base), 1)
+    slot = target_sec / len(base)
+    order = sorted((i for i in range(len(base)) if i not in set(exclude)),
+                   key=lambda i: slot - len(base[i]) * rate, reverse=True)
+    chosen, est = [], actual_sec
+    for i in order:
+        chosen.append(i)
+        est += (len(supps[i]) + 1) * rate
+        if est / target_sec >= _ATEMPO_SAFE_MIN:
+            break
+    return chosen
+
+
+_MAX_SUPP_ROUNDS = 2   # 부분 보충 재합성 최대 횟수 (TTS 호출은 최대 1 + 이 값)
+
+
+def _fit_narration(slides: list, product_name: str, n_slides: int, category: str,
+                   target_sec: float, synth) -> tuple:
+    """본 나레이션을 합성해 목표보다 짧으면 부분 보충 문장을 붙여 재합성한다. 실측 길이가 안전범위에
+    들어오면 즉시 멈추고, 아니면 실측 증가분으로 글자당 시간을 보정해 최대 _MAX_SUPP_ROUNDS번까지 더 붙인다.
+    synth(narrations) -> 합성한 실제 길이(초). 반환: (최종 narrations, 최종 실제 길이, 보충한 슬라이드 인덱스)."""
+    supps      = _supplement_texts(slides, product_name, n_slides, category)
+    narrations = _build_narration_list(slides, product_name, n_slides, category)
+    actual     = synth(narrations)
+    chosen, rate = [], None
+    for _ in range(_MAX_SUPP_ROUNDS):
+        more = _plan_supplements(narrations, supps, actual, target_sec, chosen, rate)
+        if not more:
+            break
+        added_chars = sum(len(supps[i]) + 1 for i in more)
+        chosen += more
+        print(f"[TTS] 부분 보충: 슬라이드 {sorted(i + 1 for i in more)} 추가 (누적 {len(chosen)}/{n_slides}장) 후 재합성", flush=True)
+        narrations = _build_narration_list(slides, product_name, n_slides, category, supps, chosen)
+        prev, actual = actual, synth(narrations)
+        if actual > prev:
+            rate = (actual - prev) / added_chars
+    return narrations, actual, chosen
 
 
 def _clean_caption_text(text: str) -> str:
@@ -940,15 +1015,6 @@ def _write_captions_json(narrations: list) -> None:
     captions_path = BASE_DIR / "captions.json"
     captions_path.write_text(json.dumps(clean_narrations, ensure_ascii=False), encoding="utf-8")
     print(f"[Captions] 저장: {captions_path} ({len(clean_narrations)}개, 괄호/말줄임표 제거됨)", flush=True)
-
-
-def _save_captions(slides: list, product_name: str, n_slides: int, sec_per_slide_for_text: float,
-                    category: str = "") -> None:
-    """슬라이드별 나레이션 텍스트를 captions.json으로 저장 (Remotion 자막 컴포넌트가 읽는 파일).
-    handle_generate_tts가 실제로 사용한 최종 sec_per_slide_for_text로 호출해야
-    음성과 자막 텍스트가 항상 일치한다."""
-    narrations = _build_narration_list(slides, product_name, n_slides, sec_per_slide_for_text, category)
-    _write_captions_json(narrations)
 
 
 def _save_slide_durations(narrations: list, total_sec: float) -> None:
@@ -1049,38 +1115,28 @@ def handle_generate_tts(body: bytes) -> tuple:
 
     out_path = BASE_DIR / "output_narration.wav"
 
-    # 1차 생성 (글자 수 산정은 화면 슬롯 기준 sec_per_slide 그대로 사용)
-    text_sec_per_slide = sec_per_slide
-    full_text = _build_tts_text(slides, product_name, n_slides, text_sec_per_slide, category)
-    wav_bytes = _call_typecast_tts(full_text, voice_id, api_key)
-    out_path.write_bytes(wav_bytes)
-    print(f"[TTS] 저장 완료: {out_path} ({len(wav_bytes)//1024}KB)", flush=True)
+    def synth(narrs: list) -> float:
+        out_path.write_bytes(_call_typecast_tts("\n\n".join(narrs), voice_id, api_key))
+        sec = _get_audio_duration(out_path)
+        print(f"[TTS] 합성 완료: {sec:.2f}s / 목표 {target_sec}s (비율 {sec / target_sec:.3f})", flush=True)
+        return sec
 
-    actual_sec = _get_audio_duration(out_path)
-    pre_ratio  = actual_sec / target_sec
-    print(f"[TTS] 1차 생성 길이: {actual_sec:.2f}s / 목표 {target_sec}s (비율 {pre_ratio:.3f})", flush=True)
-
-    # atempo 비율이 0.85~1.15 범위를 벗어나면 자연스럽지 않음 → 글자 수 조정해서 한 번만 재생성
-    if pre_ratio < _ATEMPO_SAFE_MIN or pre_ratio > _ATEMPO_SAFE_MAX:
-        text_sec_per_slide = round(sec_per_slide / pre_ratio, 4)
-        print(f"[TTS] 배속 범위 초과({pre_ratio:.3f}) → 글자 수 기준 재조정: "
-              f"sec_per_slide {sec_per_slide}s → {text_sec_per_slide}s 로 재생성", flush=True)
-
-        full_text = _build_tts_text(slides, product_name, n_slides, text_sec_per_slide, category)
-        wav_bytes = _call_typecast_tts(full_text, voice_id, api_key)
-        out_path.write_bytes(wav_bytes)
-        actual_sec = _get_audio_duration(out_path)
-        print(f"[TTS] 재생성 길이: {actual_sec:.2f}s / 목표 {target_sec}s (비율 {actual_sec / target_sec:.3f})", flush=True)
+    # atempo 비율이 0.85~1.15 범위를 벗어나면 자연스럽지 않음. 1차는 보충 없는 본 나레이션이고, 목표보다 짧으면
+    # 부족량이 큰 슬라이드부터 보충 문장을 붙여 범위에 들어오는 즉시 멈춘다(부분 보충, _fit_narration).
+    # 목표보다 길면 보충으로 줄일 수 없으므로 재합성 없이 atempo 보정에 맡긴다.
+    narrations, actual_sec, chosen = _fit_narration(slides, product_name, n_slides, category, target_sec, synth)
+    if chosen:
+        print(f"[TTS] 부분 보충 결과: {len(chosen)}/{n_slides}장 보충 (슬라이드 {sorted(i + 1 for i in chosen)}), "
+              f"필요 배속 {actual_sec / target_sec:.3f}", flush=True)
 
     # 최종 미세 조정 (±2% 밖이면 atempo로 보정)
     wav_bytes, actual_sec, _ = _adjust_wav_speed(out_path, target_sec)
     print(f"[TTS] 최종 길이: {actual_sec:.2f}s (목표 {target_sec}s)", flush=True)
 
-    # 자막은 실제로 TTS에 들어간 최종 텍스트(text_sec_per_slide 기준)와 항상 동일하게 저장
-    narrations_final = _build_narration_list(slides, product_name, n_slides, text_sec_per_slide, category)
-    _write_captions_json(narrations_final)
+    # 자막은 실제로 TTS에 들어간 최종 텍스트(narrations)와 항상 동일하게 저장
+    _write_captions_json(narrations)
     # 화면 노출 시간도 균등분배 대신 실제 음성 길이(actual_sec)를 글자수 비례로 분배
-    _save_slide_durations(narrations_final, actual_sec)
+    _save_slide_durations(narrations, actual_sec)
 
     return wav_bytes, actual_sec
 
