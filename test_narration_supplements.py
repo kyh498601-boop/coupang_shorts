@@ -15,6 +15,8 @@ def check_pools():
         assert len(set(lines)) == len(lines), f"{name}: 풀 안에 중복 문장"
         assert not [t for t in lines if any(b in t for b in BANNED)], f"{name}: 금지 문구 남아있음"
         assert all(len(t) <= 17 for t in lines), f"{name}: 너무 긴 문장"
+        # 체감·평가 어미는 쓰지 않는다 (스킬 outro 규칙: '~이에요/예요' 객관 서술)
+        assert not [t for t in lines if t.rstrip(".?").endswith(("좋아요", "편해요", "좋겠어요"))], f"{name}: 체감 어미"
 
 
 def check_pick():
@@ -37,7 +39,8 @@ def check_outro():
     assert v("이 문장은 열일곱 글자를 훨씬 넘어가는 아주 긴 마무리 문장이에요.") == ""       # 너무 김
     assert v("한 줄이\n두 줄이에요.") == ""                                              # 줄바꿈
     for bad in ("진짜 대박이에요.", "후회 없을 거예요.", "인증된 제품이에요.", "많은 분들이 좋아해요.",
-                "서두르세요 특가 곧 끝나요", "효과 보장해요.", "무조건 써보세요.", "마감 임박이에요."):
+                "서두르세요 특가 곧 끝나요", "효과 보장해요.", "무조건 써보세요.", "마감 임박이에요.",
+                "지금이 좋은 타이밍이에요", "지금이 기회예요"):
         assert v(bad) == "", bad
     for word in server._PROHIBITED_WORD_MAP:                                              # 절대적/최상급 표현
         assert v(f"{word}예요.") == "", word
