@@ -955,17 +955,22 @@ def _build_narration_list(slides: list, product_name: str, n_slides: int, catego
     ]
 
 
+_SUPP_CHUNK = 3            # 한 번에 붙일 최대 슬라이드 수 — 실측 없이 한꺼번에 붙였다가 넘치는 걸 막는다
+_MIN_GAIN_SEC = 0.3        # 재합성으로 이보다 적게 늘었으면 글자당 시간 보정에 쓰지 않는다 (합성 편차)
+_RATE_MIN_FACTOR = 0.5     # 보정한 글자당 시간의 허용 범위 (첫 합성 평균 대비)
+_RATE_MAX_FACTOR = 1.0
+
+
 def _plan_supplements(base: list, supps: list, actual_sec: float, target_sec: float,
-                      exclude=(), rate: float = None) -> list:
+                      exclude=(), rate: float = None, limit: int = _SUPP_CHUNK) -> list:
     """합성 결과(actual_sec)가 목표보다 짧을 때, 보충 문장을 더 붙일 슬라이드를 정한다(부분 보충).
     글자당 발화 시간(rate, 기본은 평균)으로 슬라이드별 예상 길이를 잡고, 슬롯(목표/슬라이드 수) 대비 부족량이
     큰 슬라이드부터 하나씩 붙이다가 예상 비율(길이/목표)이 배속 안전범위(_ATEMPO_SAFE_MIN 이상)에 들어오면
-    즉시 멈춘다. 이미 범위 안이거나 목표보다 길면 [] (보충은 늘리는 용도 — 긴 건 atempo 보정 몫).
-    exclude: 이미 붙인 슬라이드. base는 현재 나레이션(이미 붙인 보충 포함)이어도 된다."""
+    즉시 멈추되, 한 번에 limit장(_SUPP_CHUNK)까지만 붙인다. 이미 범위 안이거나 목표보다 길면 []
+    (보충은 늘리는 용도 — 긴 건 atempo 보정 몫). exclude: 이미 붙인 슬라이드.
+    base는 현재 나레이션(이미 붙인 보충 포함)이어도 된다."""
     if actual_sec / target_sec >= _ATEMPO_SAFE_MIN:
         return []
-    # 평균 rate는 슬라이드 사이 쉼까지 글자에 나눠 담아 실제 추가 글자당 시간보다 크다(2026-09-21 실측:
-    # 평균 대비 약 60%) — 그래서 첫 시도는 모자라기 쉽고, _fit_narration이 실측 증가분으로 rate를 보정해 다시 시도한다.
     rate = rate or actual_sec / max(sum(len(t) for t in base), 1)
     slot = target_sec / len(base)
     order = sorted((i for i in range(len(base)) if i not in set(exclude)),
@@ -974,23 +979,29 @@ def _plan_supplements(base: list, supps: list, actual_sec: float, target_sec: fl
     for i in order:
         chosen.append(i)
         est += (len(supps[i]) + 1) * rate
-        if est / target_sec >= _ATEMPO_SAFE_MIN:
+        if est / target_sec >= _ATEMPO_SAFE_MIN or len(chosen) >= limit:
             break
     return chosen
 
 
-_MAX_SUPP_ROUNDS = 2   # 부분 보충 재합성 최대 횟수 (TTS 호출은 최대 1 + 이 값)
+_MAX_SUPP_ROUNDS = 2   # 부분 보충 재합성 최대 횟수 (TTS 호출은 최대 1 + 이 값 = 3회)
 
 
 def _fit_narration(slides: list, product_name: str, n_slides: int, category: str,
                    target_sec: float, synth) -> tuple:
-    """본 나레이션을 합성해 목표보다 짧으면 부분 보충 문장을 붙여 재합성한다. 실측 길이가 안전범위에
-    들어오면 즉시 멈추고, 아니면 실측 증가분으로 글자당 시간을 보정해 최대 _MAX_SUPP_ROUNDS번까지 더 붙인다.
-    synth(narrations) -> 합성한 실제 길이(초). 반환: (최종 narrations, 최종 실제 길이, 보충한 슬라이드 인덱스)."""
+    """본 나레이션을 합성해 목표보다 짧으면 부분 보충 문장을 붙여 재합성한다. 한 번에 최대 _SUPP_CHUNK장씩 붙이고
+    실측 길이가 안전범위에 들어오면 즉시 멈춘다. 아니면 실측 증가분으로 글자당 시간을 보정해(평균 대비
+    _RATE_MIN_FACTOR~_RATE_MAX_FACTOR로 제한, 증가분이 _MIN_GAIN_SEC 미만이면 보정 무시) 최대 _MAX_SUPP_ROUNDS번까지
+    더 붙인다. synth(narrations) -> 합성한 실제 길이(초).
+    반환: (최종 narrations, 최종 실제 길이, 보충한 슬라이드 인덱스)."""
     supps      = _supplement_texts(slides, product_name, n_slides, category)
     narrations = _build_narration_list(slides, product_name, n_slides, category)
     actual     = synth(narrations)
-    chosen, rate = [], None
+    # 첫 합성의 평균 글자당 시간은 슬라이드 사이 쉼까지 담겨 실제 추가분보다 크다(실측 0.4~1.1배). 그래서 처음엔
+    # 하한(0.5배)으로 보수적으로 잡아 더 붙이고, 넘침은 _SUPP_CHUNK가 막는다.
+    avg        = actual / max(sum(len(t) for t in narrations), 1)
+    lo, hi     = avg * _RATE_MIN_FACTOR, avg * _RATE_MAX_FACTOR
+    chosen, rate = [], lo
     for _ in range(_MAX_SUPP_ROUNDS):
         more = _plan_supplements(narrations, supps, actual, target_sec, chosen, rate)
         if not more:
@@ -1000,8 +1011,11 @@ def _fit_narration(slides: list, product_name: str, n_slides: int, category: str
         print(f"[TTS] 부분 보충: 슬라이드 {sorted(i + 1 for i in more)} 추가 (누적 {len(chosen)}/{n_slides}장) 후 재합성", flush=True)
         narrations = _build_narration_list(slides, product_name, n_slides, category, supps, chosen)
         prev, actual = actual, synth(narrations)
-        if actual > prev:
-            rate = (actual - prev) / added_chars
+        gain = actual - prev
+        if gain >= _MIN_GAIN_SEC:
+            rate = min(max(gain / added_chars, lo), hi)
+        else:
+            print(f"[TTS] 증가분 {gain:.2f}s가 너무 작아 글자당 시간 보정 생략", flush=True)
     return narrations, actual, chosen
 
 

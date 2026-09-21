@@ -125,6 +125,47 @@ def check_partial_plan():
     assert first and not set(first) & set(again), (first, again)
 
 
+def _scripted_tts(durations):
+    """합성 호출 순서대로 미리 정한 길이를 돌려주는 가짜 TTS. 호출마다 보충된 슬라이드 수를 기록한다."""
+    base = server._build_narration_list(SLIDES, "닥터지", 7)
+    calls, supplemented = [], []
+
+    def synth(narrs):
+        supplemented.append(sum(1 for a, b in zip(narrs, base) if a != b))
+        calls.append(durations[len(calls)])
+        return calls[-1]
+    return synth, calls, supplemented
+
+
+def check_small_gain_case():
+    """2026-09-21 실제 실패 재현: 1차 15.75s(0.750) -> 7번 하나 보충했더니 15.90s(+0.15s, 너무 작은 증가분)를
+    글자당 시간으로 그대로 믿어 나머지 6장을 한꺼번에 붙이고 26.10s(1.243배속)로 넘쳤다.
+    지금은 증가분이 작으면 보정을 무시하고, 한 번에 _SUPP_CHUNK장까지만 붙인다."""
+    lo, hi = server._ATEMPO_SAFE_MIN, server._ATEMPO_SAFE_MAX
+    target, n, chunk = 21.0, 7, server._SUPP_CHUNK
+    # 1) 작은 증가분 뒤에 정상적으로 늘어나는 경우 -> 라운드마다 chunk장 이하, 범위 안에서 즉시 중단
+    synth, calls, sup = _scripted_tts([15.75, 15.90, 20.40])
+    narrs, actual, chosen = server._fit_narration(SLIDES, "닥터지", n, "", target, synth)
+    assert len(calls) == 3 and sup[1] <= chunk and sup[2] - sup[1] <= chunk, (calls, sup)   # 6장 일괄 붙이기 금지
+    assert lo <= actual / target <= hi, actual
+    # 2) 두 번 다 증가분이 작아도 호출 상한(3회)과 장수 상한(2 x chunk) 안에서 끝난다 (전부 붙이지 않음)
+    synth, calls, sup = _scripted_tts([15.75, 15.90, 16.05])
+    narrs, actual, chosen = server._fit_narration(SLIDES, "닥터지", n, "", target, synth)
+    assert len(calls) <= 1 + server._MAX_SUPP_ROUNDS and len(chosen) <= 2 * chunk < n, (calls, chosen)
+    # 3) 범위 안에 들어오면 즉시 중단 (1차 보충으로 도달하면 재합성 1회)
+    synth, calls, sup = _scripted_tts([14.25, 18.90])
+    narrs, actual, chosen = server._fit_narration(SLIDES, "닥터지", n, "", target, synth)
+    assert len(calls) == 2 and 0 < len(chosen) <= chunk and lo <= actual / target <= hi, (calls, chosen)
+    # 4) _plan_supplements 단독: 아무리 짧아도 한 번에 chunk장까지만
+    base = server._build_narration_list(SLIDES, "닥터지", n)
+    supps = server._supplement_texts(SLIDES, "닥터지", n)
+    assert len(server._plan_supplements(base, supps, 5.0, target)) == chunk
+    # 5) 보정 하한: 증가분이 커서 평균의 0.5~1.0배를 벗어나도 그 범위로 잘라 쓴다 (한 라운드 상한과 함께 넘침 방지)
+    synth, calls, sup = _scripted_tts([12.0, 13.5, 20.0])
+    server._fit_narration(SLIDES, "닥터지", n, "", target, synth)
+    assert len(calls) <= 3 and max(sup) <= 2 * chunk, (calls, sup)
+
+
 def check_render_guard():
     """렌더링 중에는 TTS·SRT 둘 다 거부 (handlers는 가드가 맨 앞이라 body가 비어 있어도 거기서 멈춘다)."""
     for handler in (server.handle_generate_tts, server.handle_generate_srt):
@@ -145,5 +186,6 @@ if __name__ == "__main__":
     check_outro()
     check_build_list()
     check_partial_plan()
+    check_small_gain_case()
     check_render_guard()
     print("test_narration_supplements OK")
