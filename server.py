@@ -24,6 +24,7 @@ POST /generate-png  -> JSON {slides, images(base64[]), productName, category}
 
 import base64
 import datetime
+import hashlib
 import io
 import json
 import math
@@ -371,10 +372,19 @@ def render_slide(idx: int, slide: dict, product_img: Image.Image | None, product
 # ──────────────────────────────────────────────────────────────
 def handle_generate_png(body: bytes) -> bytes:
     payload      = json.loads(body)
-    slides       = payload.get("slides", [])
+    # 2026-09-24 수정: copyHash 계산 기준을 이 원본(override/폴백 전) slides로 고정한다 —
+    # 아래에서 ab_headline으로 slides[0].headline을 덮어써도 이 변수는 건드리지 않는다.
+    # /generate-tts·/generate-srt는 애초에 이런 override 개념이 없어 항상 원본 slides로
+    # _slides_signature()를 계산하므로, PNG 쪽도 같은 기준을 써야 두 해시가 일치한다.
+    # (재발 버그: A/B 썸네일 선택만 바꿔도 PNG copyHash가 TTS와 달라져 렌더링이 막히던 문제 —
+    # thumbnailA/B는 category-copy-rules SKILL.md 8번 규칙상 "같은 카피 세션의 화면 변형"일
+    # 뿐이라 나레이션에 전혀 영향을 주지 않는데도, 해시가 이 override까지 반영해 서로 다른
+    # 카피 버전처럼 보였다. 2026-09-24 재현: scratchpad/hash_repro/driver.py·driver2.py 참고.)
+    slides_input = payload.get("slides", [])
     images_b64   = payload.get("images", [])
     product_name = payload.get("productName", "")
     ab_headline  = (payload.get("abHeadline") or "").strip()
+    slides       = slides_input
 
     # base64 -> PIL
     pil_images = [img for img in (b64_to_pil(b) for b in images_b64) if img]
@@ -409,6 +419,14 @@ def handle_generate_png(body: bytes) -> bytes:
             name = f"slide_{i+1:02d}.png"
             zf.writestr(name, png_bytes)
             (input_dir / name).write_bytes(png_bytes)
+
+    # PNG가 어느 카피 버전으로 만들어졌는지 기록 — TTS 쪽(tts_session_meta.json)과 같은 해시
+    # 함수(_slides_signature)를 써서, 렌더 시작 전 두 버전이 같은지 대조할 수 있게 한다
+    # (요구사항 5: "PNG·음성·자막이 동일한 확정 카피 버전으로 생성됐는지 확인").
+    # slides_input(override 전 원본) 기준 — 위 주석 참고, A/B 선택은 해시에 반영하지 않는다.
+    _COPY_VERSION_PATH.write_text(
+        json.dumps({"productName": product_name, "copyHash": _slides_signature(slides_input)}, ensure_ascii=False),
+        encoding="utf-8")
 
     return buf.getvalue()
 
@@ -619,7 +637,17 @@ def _narration_from_slide(slide: dict) -> str:
     나레이션도 그에 맞춰 자동으로 달라진다 — 고정 인덱스 템플릿이 아니라 슬라이드
     내용 자체가 소스이기 때문. headline/body가 비어 있으면 빈 문자열을 반환해
     호출부(build_narration)가 _NARRATION_TEMPLATES 폴백을 쓰도록 한다.
+
+    2026-09-23: slide["narration"](화면·음성 분리 선택 필드)이 있으면 그것을 최우선으로
+    쓴다 — headline 요약·어미 보정을 거치지 않고 기호만 정리해 그대로 반환한다(사용자
+    완성 대본(fullScript) 모드에서 원문을 훼손하지 않기 위함 — category-copy-rules
+    SKILL.md "사용자 제공 완성 대본 처리" 참고). narration이 없으면(대부분의 기존
+    completed JSON) 아래 headline 기반 로직으로 폴백 — 기존 동작 100% 유지.
     """
+    narration_field = (slide.get("narration") or "").strip()
+    if narration_field:
+        return _NARRATION_STRIP_PATTERN.sub("", narration_field).strip()
+
     headline = (slide.get("headline") or slide.get("title") or "").strip()
     body     = (slide.get("body") or "").strip()
     if not headline:
@@ -717,7 +745,7 @@ def _filter_prohibited_words(text: str) -> str:
 
 
 def build_narration(slide: dict, product_name: str, idx: int,
-                    category: str = "", supplement: str = "") -> str:
+                    category: str = "", supplement: str = "", script_source: str = "") -> str:
     """슬라이드 나레이션 텍스트를 만든다.
 
     문장을 중간에 잘라내지 않는다(완성 문장 보장) — TTS와 자막이 항상 같은 함수 결과를
@@ -735,15 +763,33 @@ def build_narration(slide: dict, product_name: str, idx: int,
     category가 식품/식품_신선이면 폴백 템플릿·보충 문장을 "먹다/드시다"류 어휘 세트
     (_NARRATION_TEMPLATES_FOOD/_SUPPLEMENTS_FOOD)로 바꿔 "실사용자"·"써보시면" 같은
     기기 사용을 연상시키는 표현이 나가지 않도록 한다.
+
+    2026-09-23: script_source=="user"(완성 대본 모드)면 headline/narration이 둘 다 비어 있어도
+    _NARRATION_TEMPLATES 폴백을 쓰지 않는다 — 이 폴백 문구는 AI가 지어낸 범용 문장이라("다들
+    극찬하는 이유가 있어요" 등) 사용자가 원문에 안 쓴 슬롯에 끼워 넣으면 "임의로 문구를 추가하지
+    않는다"는 원칙을 어기게 된다(category-copy-rules SKILL.md "사용자 제공 완성 대본 처리" 참고).
+    이 경우 빈 문자열을 그대로 반환한다 — 그 슬롯은 음성 없이(사실상 무음에 가깝게) 남는다.
+    AI 자동 생성 모드(script_source가 "user"가 아님)는 기존 폴백 동작을 그대로 유지한다.
+
+    2026-09-24 수정: script_source=="user"일 때 narration 필드가 비어 있으면(short 슬롯) headline
+    요약(_narration_from_slide의 headline 폴백)으로도 대체하지 않는다 — 이전에는 이 폴백이
+    narration 필드 유무만 봤을 뿐 script_source를 확인하지 않아서, (b) 규칙에 따라 short 슬롯의
+    화면용 headline/body만 채워 넣어도 그 headline이 그대로 음성·자막에 새 나레이션으로 끼어드는
+    재발 버그가 있었다("원문에 없는 문장을 지어내지 않는다"는 원칙을 headline 경유로 우회 위반).
+    완성 대본 모드에서 narration의 유일한 소스는 사용자가 직접 채운 narration 필드뿐이다.
     """
     p = product_name or "이 제품"
     is_food = category in _FOOD_CATEGORIES
 
-    narration = _narration_from_slide(slide)
-    if not narration:
-        templates = _NARRATION_TEMPLATES_FOOD if is_food else _NARRATION_TEMPLATES
-        template  = templates[idx] if idx < len(templates) else templates[-1]
-        narration = template(p)
+    if script_source == "user":
+        narration = (slide.get("narration") or "").strip()
+        narration = _NARRATION_STRIP_PATTERN.sub("", narration).strip()
+    else:
+        narration = _narration_from_slide(slide)
+        if not narration:
+            templates = _NARRATION_TEMPLATES_FOOD if is_food else _NARRATION_TEMPLATES
+            template  = templates[idx] if idx < len(templates) else templates[-1]
+            narration = template(p)
 
     narration = re.sub(r"[→#\*_`]", "", narration)
     # 필러(말 멈춤 표현) 제거: 다른 한글 음절에 붙어있지 않고 독립된 "음/아/어"(반복·물결 포함)만 제거
@@ -775,32 +821,62 @@ def _load_json_if_matches(path: Path, expected_len: int):
 
 # captions.json/slide_durations.json은 render.ps1이 순수 JSON 배열로 파싱하므로(.Count 등)
 # 상품명 메타를 그 안에 직접 넣을 수 없다 — 대신 별도 세션 메타 파일로 "이 캐시가 어느
-# 상품 것인지"를 추적하고, 상품명이 바뀌면 캐시 3종(자막/타이밍/나레이션)을 통째로 삭제한다.
+# 상품·어느 카피 버전 것인지"를 추적하고, 상품명 또는 카피 내용이 바뀌면 캐시 3종
+# (자막/타이밍/나레이션)을 통째로 삭제한다.
 _TTS_SESSION_META_PATH = BASE_DIR / "tts_session_meta.json"
 _TTS_CACHE_FILES = ("captions.json", "slide_durations.json", "output_narration.wav")
+# /generate-png가 만든 PNG의 카피 버전 기록 — /render-video 시작 전 _TTS_SESSION_META_PATH의
+# copyHash와 비교해 PNG·음성이 서로 다른 카피 버전으로 섞이지 않았는지 확인한다.
+_COPY_VERSION_PATH = BASE_DIR / "public" / "input" / "_copy_version.json"
 
 
-def _invalidate_stale_tts_cache(product_name: str) -> bool:
-    """세션 메타에 기록된 상품명과 다르면 자막/타이밍/나레이션 캐시 파일을 모두 삭제하고
-    메타를 현재 상품명으로 갱신한다. 반환값: 무효화(삭제)가 실제로 일어났는지 여부."""
+def _slides_signature(slides: list) -> str:
+    """headline/body/outro/narration만으로 카피 내용 해시를 만든다 — 같은 상품이어도
+    카피(narration 포함)가 바뀌면 이 값이 달라져 TTS/SRT 캐시 무효화 판단에 쓰인다
+    (2026-09-23: productName만 보던 기존 판단으로는 같은 상품 카피 재생성 시 구 캐시가
+    잘못 재사용되는 문제가 있었음 — _invalidate_stale_tts_cache 참고)."""
+    sig = [
+        {
+            "headline":  s.get("headline", "") or "",
+            "body":      s.get("body", "") or "",
+            "outro":     s.get("outro", "") or "",
+            "narration": s.get("narration", "") or "",
+        }
+        for s in slides
+    ]
+    raw = json.dumps(sig, ensure_ascii=False, sort_keys=True)
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
+
+
+def _invalidate_stale_tts_cache(product_name: str, content_hash: str = "") -> bool:
+    """세션 메타에 기록된 상품명·카피 해시와 다르면 자막/타이밍/나레이션 캐시 파일을
+    모두 삭제하고 메타를 현재 값으로 갱신한다. content_hash는 _slides_signature() 결과 —
+    상품명이 같아도 카피 내용(narration 포함)이 바뀌면 무효화한다.
+    반환값: 무효화(삭제)가 실제로 일어났는지 여부."""
     prev_name = None
+    prev_hash = None
     if _TTS_SESSION_META_PATH.exists():
         try:
-            prev_name = json.loads(_TTS_SESSION_META_PATH.read_text(encoding="utf-8")).get("productName")
+            meta = json.loads(_TTS_SESSION_META_PATH.read_text(encoding="utf-8"))
+            prev_name = meta.get("productName")
+            prev_hash = meta.get("copyHash")
         except Exception:
             prev_name = None
+            prev_hash = None
 
-    if prev_name == product_name:
+    if prev_name == product_name and prev_hash == content_hash:
         return False
 
     for fname in _TTS_CACHE_FILES:
         fpath = BASE_DIR / fname
         if fpath.exists():
             fpath.unlink()
-            print(f"[세션] 상품 전환 감지({prev_name!r} → {product_name!r}) → {fname} 삭제", flush=True)
+            print(f"[세션] 상품/카피 전환 감지(상품 {prev_name!r}→{product_name!r}, "
+                  f"카피변경={prev_hash != content_hash}) → {fname} 삭제", flush=True)
 
     _TTS_SESSION_META_PATH.write_text(
-        json.dumps({"productName": product_name}, ensure_ascii=False), encoding="utf-8")
+        json.dumps({"productName": product_name, "copyHash": content_hash}, ensure_ascii=False),
+        encoding="utf-8")
     return True
 
 
@@ -819,13 +895,14 @@ def _reject_if_rendering(what: str) -> None:
 def handle_generate_srt(body: bytes) -> bytes:
     _reject_if_rendering("자막을")
 
-    payload      = json.loads(body)
-    slides       = payload.get("slides", [])
-    product_name = payload.get("productName", "")
-    category     = payload.get("category", "")
+    payload       = json.loads(body)
+    slides        = payload.get("slides", [])
+    product_name  = payload.get("productName", "")
+    category      = payload.get("category", "")
+    script_source = payload.get("scriptSource", "")
 
-    if _invalidate_stale_tts_cache(product_name):
-        print(f"[SRT] 상품 전환으로 이전 캐시 무효화됨 → {product_name!r} 기준으로 새로 생성", flush=True)
+    if _invalidate_stale_tts_cache(product_name, _slides_signature(slides)):
+        print(f"[SRT] 상품/카피 전환으로 이전 캐시 무효화됨 → {product_name!r} 기준으로 새로 생성", flush=True)
 
     n_slides     = min(len(slides), SLIDE_TOTAL) or SLIDE_TOTAL
     ms_per_slide, _, _ = _slide_timing(n_slides)
@@ -838,7 +915,7 @@ def handle_generate_srt(body: bytes) -> bytes:
     cached_durations = _load_json_if_matches(BASE_DIR / "slide_durations.json", n_slides)
 
     narrations = cached_captions if cached_captions is not None else \
-        _build_narration_list(slides, product_name, n_slides, category)
+        _build_narration_list(slides, product_name, n_slides, category, script_source=script_source)
     slide_sec  = cached_durations if cached_durations is not None else [sec_per_slide] * n_slides
 
     timing_src = "실제 음성 길이 비례(slide_durations.json)" if cached_durations is not None else "화면 타이밍 균등 분배"
@@ -942,15 +1019,16 @@ def _supplement_texts(slides: list, product_name: str, n_slides: int, category: 
 
 
 def _build_narration_list(slides: list, product_name: str, n_slides: int, category: str = "",
-                           supplements: list = None, supp_idx=()) -> list:
+                           supplements: list = None, supp_idx=(), script_source: str = "") -> list:
     """슬라이드별 순수 나레이션 텍스트(감정 프리픽스 없음) 리스트.
     TTS 본문과 자막(captions.json)이 항상 같은 소스를 쓰도록 이 함수 하나로 통일한다.
     supp_idx에 든 슬라이드에만 supplements[i]를 덧붙인다(부분 보충) — 기본은 보충 없음.
-    category는 build_narration()의 식품 전용 어휘("먹다/드시다"류) 분기에 쓰인다."""
+    category는 build_narration()의 식품 전용 어휘("먹다/드시다"류) 분기에 쓰인다.
+    script_source는 build_narration()에 그대로 전달 — "user"면 빈 슬롯에 AI 폴백 문구를 채우지 않는다."""
     chosen = set(supp_idx)
     return [
         build_narration(slides[i] if i < len(slides) else {}, product_name, i, category,
-                        supplements[i] if i in chosen else "")
+                        supplements[i] if i in chosen else "", script_source)
         for i in range(n_slides)
     ]
 
@@ -988,15 +1066,23 @@ _MAX_SUPP_ROUNDS = 2   # 부분 보충 재합성 최대 횟수 (TTS 호출은 �
 
 
 def _fit_narration(slides: list, product_name: str, n_slides: int, category: str,
-                   target_sec: float, synth) -> tuple:
+                   target_sec: float, synth, script_source: str = "") -> tuple:
     """본 나레이션을 합성해 목표보다 짧으면 부분 보충 문장을 붙여 재합성한다. 한 번에 최대 _SUPP_CHUNK장씩 붙이고
     실측 길이가 안전범위에 들어오면 즉시 멈춘다. 아니면 실측 증가분으로 글자당 시간을 보정해(평균 대비
     _RATE_MIN_FACTOR~_RATE_MAX_FACTOR로 제한, 증가분이 _MIN_GAIN_SEC 미만이면 보정 무시) 최대 _MAX_SUPP_ROUNDS번까지
     더 붙인다. synth(narrations) -> 합성한 실제 길이(초).
+
+    script_source=="user"(완성 대본 모드)면 보충 문장 라운드를 아예 건너뛴다 — 사용자 원문(narration) 뒤에
+    AI가 만든 고정 문구/outro를 이어붙이면 "임의로 문장을 추가하지 않는다"는 요구사항을 어기게 된다
+    (category-copy-rules SKILL.md "완성 대본 모드의 자동 보충문장" 참고). 길이는 atempo(호출부의
+    _adjust_wav_speed)에만 맡긴다.
+
     반환: (최종 narrations, 최종 실제 길이, 보충한 슬라이드 인덱스)."""
     supps      = _supplement_texts(slides, product_name, n_slides, category)
-    narrations = _build_narration_list(slides, product_name, n_slides, category)
+    narrations = _build_narration_list(slides, product_name, n_slides, category, script_source=script_source)
     actual     = synth(narrations)
+    if script_source == "user":
+        return narrations, actual, []
     # 첫 합성의 평균 글자당 시간은 슬라이드 사이 쉼까지 담겨 실제 추가분보다 크다(실측 0.4~1.1배). 그래서 처음엔
     # 하한(0.5배)으로 보수적으로 잡아 더 붙이고, 넘침은 _SUPP_CHUNK가 막는다.
     avg        = actual / max(sum(len(t) for t in narrations), 1)
@@ -1039,21 +1125,65 @@ def _write_captions_json(narrations: list) -> None:
     print(f"[Captions] 저장: {captions_path} ({len(clean_narrations)}개, 괄호/말줄임표 제거됨)", flush=True)
 
 
-def _save_slide_durations(narrations: list, total_sec: float) -> None:
+_EMPTY_SLOT_FLOOR_SEC = 1.5   # 완성 대본 모드 전용 시험값 — Remotion 크로스페이드 겹침(0.4초)보다
+                              # 충분히 크게 잡아, 빈 슬롯이 0.1초대로 사라져 전환이 깨지는 걸 막는다.
+
+
+def _save_slide_durations(narrations: list, total_sec: float, min_floor_sec: float = 0.0) -> None:
     """슬라이드별 화면 노출 시간을 '실제 음성 글자수 비례'로 분배해 slide_durations.json에 저장.
     완전한 단어 단위 타임스탬프는 아니지만, 균등분배보다 실제 발화 길이에 훨씬 가깝다.
     render.ps1이 이 파일을 읽어 슬라이드별 프레임 수를 다르게 적용한다.
+
+    2026-09-23(시험): min_floor_sec>0이면 narration이 빈 슬라이드(완성 대본 모드의 "short" 슬롯 —
+    원문에 대응 문장이 없어 의도적으로 비워둔 경우)를 글자수 비례 계산에서 빼고 먼저 이 최소
+    시간을 배정한 뒤, 남은 시간만 콘텐츠 있는 슬라이드끼리 기존 방식대로 나눈다. narration
+    텍스트 자체(빈 문자열)는 건드리지 않는다 — 화면 노출 시간 배분만 바뀐다.
+    AI 자동 생성 모드는 min_floor_sec=0.0(기본값)을 그대로 넘기므로 기존 동작과 100% 동일하다.
+
+    유효한 배분이 불가능하면(빈 슬라이드가 전부이거나, floor 합이 total_sec 이상) 0.1초대로
+    조용히 폴백하지 않고 ValueError를 그대로 올린다 — 호출부가 따로 잡지 않으면 500 응답으로
+    드러나 사용자가 대본을 고치도록 안내해야 한다.
     """
-    lengths   = [max(len(t), 1) for t in narrations]
-    total_len = sum(lengths)
-    durations_sec = [round(total_sec * (l / total_len), 3) for l in lengths]
-    # 반올림 오차를 마지막 슬라이드에서 보정해 합계가 total_sec과 정확히 일치하도록 함
-    diff = round(total_sec - sum(durations_sec), 3)
-    durations_sec[-1] = round(durations_sec[-1] + diff, 3)
+    empty_idx = [i for i, t in enumerate(narrations) if not (t or "").strip()] if min_floor_sec > 0 else []
+
+    if empty_idx:
+        content_idx = [i for i in range(len(narrations)) if i not in set(empty_idx)]
+        if not content_idx:
+            raise ValueError(
+                f"모든 슬라이드({len(narrations)}개)에 narration이 없어 최소 노출 시간을 배분할 "
+                "콘텐츠 슬라이드가 하나도 없습니다 — 대본을 확인해주세요."
+            )
+        floor_sum  = round(min_floor_sec * len(empty_idx), 3)
+        remain_sec = round(total_sec - floor_sum, 3)
+        if remain_sec <= 0:
+            raise ValueError(
+                f"빈 슬라이드 {len(empty_idx)}개 × 최소 {min_floor_sec}초 = {floor_sum}초가 전체 "
+                f"나레이션 길이 {total_sec:.2f}초 이상입니다 — 대본을 늘리거나 빈 슬롯을 줄여주세요."
+            )
+        lengths   = [max(len(narrations[i]), 1) for i in content_idx]
+        total_len = sum(lengths)
+
+        durations_sec = [0.0] * len(narrations)
+        for i in empty_idx:
+            durations_sec[i] = min_floor_sec
+        for i, l in zip(content_idx, lengths):
+            durations_sec[i] = round(remain_sec * (l / total_len), 3)
+
+        # 반올림 오차는 콘텐츠 슬라이드 중 마지막 것에서 보정 — 빈 슬롯의 floor는 건드리지 않는다.
+        diff = round(total_sec - sum(durations_sec), 3)
+        durations_sec[content_idx[-1]] = round(durations_sec[content_idx[-1]] + diff, 3)
+    else:
+        lengths   = [max(len(t), 1) for t in narrations]
+        total_len = sum(lengths)
+        durations_sec = [round(total_sec * (l / total_len), 3) for l in lengths]
+        # 반올림 오차를 마지막 슬라이드에서 보정해 합계가 total_sec과 정확히 일치하도록 함
+        diff = round(total_sec - sum(durations_sec), 3)
+        durations_sec[-1] = round(durations_sec[-1] + diff, 3)
 
     path = BASE_DIR / "slide_durations.json"
     path.write_text(json.dumps(durations_sec), encoding="utf-8")
-    print(f"[Captions] 슬라이드별 노출 시간(글자수 비례, 실제 음성 {total_sec:.2f}s 기준): "
+    floor_note = f", 빈 슬롯 {len(empty_idx)}개 최소 {min_floor_sec}초 적용" if empty_idx else ""
+    print(f"[Captions] 슬라이드별 노출 시간(글자수 비례{floor_note}, 실제 음성 {total_sec:.2f}s 기준): "
           f"{durations_sec}", flush=True)
 
 
@@ -1101,7 +1231,10 @@ def _call_typecast_tts(full_text: str, voice_id: str, api_key: str) -> bytes:
 
 
 _ATEMPO_SAFE_MIN = 0.85   # 이 범위를 벗어나면 부자연스러운 배속으로 간주
-_ATEMPO_SAFE_MAX = 1.15
+_ATEMPO_SAFE_MAX = 1.15   # 2026-09-23: 완성 대본(fullScript) 모드 길이 경고 판정에 사용 —
+                          # 이 범위를 넘겨 배속을 걸어야 하면 원문을 늘리거나(보충 금지) 줄일(재작성 금지)
+                          # 수 없으므로 STEP3에 경고만 띄운다(_LENGTH_STATUS 참고). 0.85/1.15는
+                          # "이 배속까지는 부자연스럽지 않다"는 추정치 — 코드로 검증된 값이 아니라 실측 필요.
 
 
 def handle_generate_tts(body: bytes) -> tuple:
@@ -1110,14 +1243,15 @@ def handle_generate_tts(body: bytes) -> tuple:
     # (2026-09-21 로그로 확인). handle_generate_bgm과 같은 방식으로 명시적으로 차단한다.
     _reject_if_rendering("나레이션을")
 
-    payload      = json.loads(body)
-    slides       = payload.get("slides", [])
-    product_name = payload.get("productName", "")
-    category     = payload.get("category", "")
-    voice_id     = payload.get("voiceId") or payload.get("voiceName") or _get_env("TYPECAST_VOICE_ID")
+    payload       = json.loads(body)
+    slides        = payload.get("slides", [])
+    product_name  = payload.get("productName", "")
+    category      = payload.get("category", "")
+    script_source = payload.get("scriptSource", "")   # "user" = 완성 대본(fullScript) 모드
+    voice_id      = payload.get("voiceId") or payload.get("voiceName") or _get_env("TYPECAST_VOICE_ID")
 
-    if _invalidate_stale_tts_cache(product_name):
-        print(f"[TTS] 상품 전환으로 이전 캐시 무효화됨 → {product_name!r} 기준으로 새로 생성", flush=True)
+    if _invalidate_stale_tts_cache(product_name, _slides_signature(slides)):
+        print(f"[TTS] 상품/카피 전환으로 이전 캐시 무효화됨 → {product_name!r} 기준으로 새로 생성", flush=True)
 
     # 슬라이드 수 기반 타이밍 자동 산정 (화면 길이 — 건드리지 않음)
     n_slides      = min(len(slides), SLIDE_TOTAL) or SLIDE_TOTAL
@@ -1146,21 +1280,36 @@ def handle_generate_tts(body: bytes) -> tuple:
     # atempo 비율이 0.85~1.15 범위를 벗어나면 자연스럽지 않음. 1차는 보충 없는 본 나레이션이고, 목표보다 짧으면
     # 부족량이 큰 슬라이드부터 보충 문장을 붙여 범위에 들어오는 즉시 멈춘다(부분 보충, _fit_narration).
     # 목표보다 길면 보충으로 줄일 수 없으므로 재합성 없이 atempo 보정에 맡긴다.
-    narrations, actual_sec, chosen = _fit_narration(slides, product_name, n_slides, category, target_sec, synth)
+    narrations, actual_sec, chosen = _fit_narration(slides, product_name, n_slides, category, target_sec, synth,
+                                                      script_source=script_source)
     if chosen:
         print(f"[TTS] 부분 보충 결과: {len(chosen)}/{n_slides}장 보충 (슬라이드 {sorted(i + 1 for i in chosen)}), "
               f"필요 배속 {actual_sec / target_sec:.3f}", flush=True)
 
     # 최종 미세 조정 (±2% 밖이면 atempo로 보정)
-    wav_bytes, actual_sec, _ = _adjust_wav_speed(out_path, target_sec)
+    wav_bytes, actual_sec, pre_ratio = _adjust_wav_speed(out_path, target_sec)
     print(f"[TTS] 최종 길이: {actual_sec:.2f}s (목표 {target_sec}s)", flush=True)
 
+    # 완성 대본(fullScript) 모드는 원문을 늘리거나 줄일 수 없으므로(보충문장/재작성 금지),
+    # atempo 배속만으로 부자연스러워질 정도면 STEP3에서 사용자가 대본 길이를 직접 조정하도록
+    # 경고를 반환한다 — AI 자동 생성 모드는 보충문장이 이미 이 범위를 맞춰주므로 경고하지 않는다.
+    length_status = ""
+    if script_source == "user":
+        if pre_ratio < _ATEMPO_SAFE_MIN:
+            length_status = "short"
+        elif pre_ratio > _ATEMPO_SAFE_MAX:
+            length_status = "long"
+
+    # 화면 노출 시간을 먼저 계산·검증한다(실패하면 여기서 예외 발생) — captions.json을 먼저 쓰고
+    # 나중에 실패하면 자막은 새 것, 노출 시간은 이전 실행의 낡은 값으로 남아 서로 어긋나게 된다.
+    # 완성 대본(fullScript) 모드일 때만 빈 슬롯 최소 노출 시간(_EMPTY_SLOT_FLOOR_SEC)을 적용 —
+    # AI 자동 생성 모드는 min_floor_sec=0.0 그대로라 기존 동작과 동일하다.
+    _save_slide_durations(narrations, actual_sec,
+                          min_floor_sec=_EMPTY_SLOT_FLOOR_SEC if script_source == "user" else 0.0)
     # 자막은 실제로 TTS에 들어간 최종 텍스트(narrations)와 항상 동일하게 저장
     _write_captions_json(narrations)
-    # 화면 노출 시간도 균등분배 대신 실제 음성 길이(actual_sec)를 글자수 비례로 분배
-    _save_slide_durations(narrations, actual_sec)
 
-    return wav_bytes, actual_sec
+    return wav_bytes, actual_sec, length_status
 
 
 # ──────────────────────────────────────────────────────────────
@@ -2006,6 +2155,26 @@ def _run_render_worker(platform: str = "") -> None:
     print(f"[Render] 완료 (exitCode={rc})", flush=True)
 
 
+def _check_copy_version_mismatch() -> str | None:
+    """PNG(_COPY_VERSION_PATH)와 TTS(_TTS_SESSION_META_PATH)가 기록한 copyHash를 비교한다.
+    둘 중 하나라도 없으면(비교 불가 — 아직 한쪽을 안 만들었거나 이번 개선 이전 구버전 세션)
+    None을 반환해 기존 동작(막지 않음)을 유지한다. 둘 다 있는데 다르면 불일치 메시지를 반환한다
+    — 카피를 고친 뒤 PNG 또는 TTS 중 한쪽만 다시 만들면 이 상태가 된다."""
+    if not _COPY_VERSION_PATH.exists() or not _TTS_SESSION_META_PATH.exists():
+        return None
+    try:
+        png_meta = json.loads(_COPY_VERSION_PATH.read_text(encoding="utf-8"))
+        tts_meta = json.loads(_TTS_SESSION_META_PATH.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    png_hash, tts_hash = png_meta.get("copyHash"), tts_meta.get("copyHash")
+    if png_hash and tts_hash and png_hash != tts_hash:
+        return ("PNG와 나레이션(음성·자막)이 서로 다른 카피 버전으로 생성되어 있습니다 — "
+                "카피를 수정한 뒤 PNG 7장 다운로드와 나레이션 생성 중 한쪽만 다시 실행하면 이 상태가 됩니다. "
+                "PNG 7장 다운로드와 나레이션 생성을 다시 순서대로 실행한 뒤 렌더링해주세요.")
+    return None
+
+
 def handle_render_video(body: bytes) -> bytes:
     """POST /render-video — render.ps1 백그라운드 실행.
 
@@ -2019,6 +2188,12 @@ def handle_render_video(body: bytes) -> bytes:
     with _render_lock:
         if _render_state.get("running"):
             raise RuntimeError("이미 렌더링이 진행 중입니다. /render-status 로 확인하세요.")
+
+    mismatch = _check_copy_version_mismatch()
+    if mismatch:
+        raise RuntimeError(mismatch)
+
+    with _render_lock:
         _render_state = {"running": True, "done": False, "exitCode": None, "log": [], "finishedAt": None}
 
     payload   = json.loads(body) if body else {}
@@ -2130,18 +2305,24 @@ COMPLETED_DIR = BASE_DIR / "public" / "completed"
 
 def handle_request_copy(body: bytes) -> bytes:
     """POST /request-copy
-    { productName, partnerLink, category, productImages: base64[], reviewImages: base64[] }
+    { productName, partnerLink, category, productImages: base64[], reviewImages: base64[], fullScript? }
 
     productName/category/productImages 가 비어있으면 저장하지 않고 에러를 반환한다.
     (재발 버그: 카테고리 불일치·상품평 미반영 카피가 조용히 생성되던 문제 방지 —
     입력이 불충분하면 예시 문구로 조용히 대체하지 않고 막는다.)
     reviewImages는 STEP1에서 선택 입력이라 비어있을 수 있다 — 비어있으면 그대로
     빈 배열로 저장해, Claude Code 세션이 실제 리뷰 인용을 지어내지 않도록 한다.
+
+    fullScript(선택, 2026-09-23 추가)는 사용자가 STEP1에 붙여넣은 완성 대본 원문이다.
+    가공 없이 그대로 pending JSON에 저장한다 — 여기서 문장을 나누거나 요약하지 않는다
+    (실제 7슬라이드 배분은 category-copy-rules 스킬의 "사용자 제공 완성 대본 처리" 절차가
+    수행). 비어있으면(기존 방식) 필드 자체를 생략해 구버전 pending JSON과 동일한 모양을 유지한다.
     """
     payload      = json.loads(body) if body else {}
     product_name = (payload.get("productName") or "").strip()
     category     = (payload.get("category") or "").strip()
     partner_link = (payload.get("partnerLink") or "").strip()
+    full_script  = (payload.get("fullScript") or "").strip()
     product_imgs_b64 = [b for b in payload.get("productImages", []) if isinstance(b, str) and b.strip()]
     review_imgs_b64  = [b for b in payload.get("reviewImages", [])  if isinstance(b, str) and b.strip()]
 
@@ -2188,11 +2369,14 @@ def handle_request_copy(body: bytes) -> bytes:
         "productImages": product_paths,
         "reviewImages":  review_paths,
     }
+    if full_script:
+        pending_payload["fullScript"] = full_script
     (PENDING_DIR / f"{request_id}.json").write_text(
         json.dumps(pending_payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
     print(f"[카피생성요청] {request_id} 저장됨 — product={product_name!r} category={category!r} "
-          f"productImgs={len(product_paths)} reviewImgs={len(review_paths)}", flush=True)
+          f"productImgs={len(product_paths)} reviewImgs={len(review_paths)} "
+          f"fullScript={'있음(' + str(len(full_script)) + '자)' if full_script else '없음'}", flush=True)
 
     # 2026-07-09: pending 저장 직후 헤드리스 Claude Code 호출을 백그라운드로 바로 띄운다.
     # 실패해도(claude CLI 없음/타임아웃/completed 파일 미생성) 사람이 "pending 처리해줘"라고
@@ -2741,11 +2925,12 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(200, "text/plain; charset=utf-8", srt_bytes,
                            {"Content-Disposition": 'attachment; filename="output.srt"'})
             elif path == "/generate-tts":
-                wav_bytes, narr_dur = handle_generate_tts(body)
+                wav_bytes, narr_dur, length_status = handle_generate_tts(body)
                 self._send(200, "audio/wav", wav_bytes, {
                     "Content-Disposition": 'attachment; filename="output_narration.wav"',
                     "X-Narration-Duration": str(round(narr_dur, 2)),
-                    "Access-Control-Expose-Headers": "X-Narration-Duration",
+                    "X-Length-Status": length_status,  # ""/"short"/"long" — 완성 대본 모드 길이 경고
+                    "Access-Control-Expose-Headers": "X-Narration-Duration, X-Length-Status",
                 })
             elif path in ("/generate-bgm", "/change-bgm"):
                 mp4_bytes, bgm_name, source_mtime_iso = handle_generate_bgm(body)
